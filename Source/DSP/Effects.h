@@ -15,6 +15,8 @@ public:
         size = (int) std::ceil (maxSeconds * sr) + 4;
         bufL.assign ((size_t) size, 0.f);
         bufR.assign ((size_t) size, 0.f);
+        firstSet = true;                 // delay times from an old sample rate are meaningless now
+        targetDelay = curDelay = 1000.f;
         reset();
     }
     void reset()
@@ -22,6 +24,7 @@ public:
         std::fill (bufL.begin(), bufL.end(), 0.f);
         std::fill (bufR.begin(), bufR.end(), 0.f);
         pos = 0; lpL = lpR = 0.f;
+        targetDelay = std::clamp (targetDelay, 16.f, (float) (size - 4));
         curDelay = targetDelay;
     }
     void set (double timeSeconds, float feedback, bool pingPong, float wetGain)
@@ -39,6 +42,7 @@ public:
         for (int i = 0; i < n; ++i)
         {
             curDelay += (targetDelay - curDelay) * 0.0008f;
+            curDelay = std::clamp (curDelay, 1.f, (float) (size - 4));      // never read outside the ring
             const float dl = read (bufL, curDelay), dr = read (bufR, curDelay);
             lpL += lpCoef * (dl - lpL);
             lpR += lpCoef * (dr - lpR);

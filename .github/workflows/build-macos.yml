@@ -44,7 +44,7 @@ jobs:
           cp -R dist/Components/HumRig.component "$HOME/Library/Audio/Plug-Ins/Components/"
           killall -9 AudioComponentRegistrar || true
           sleep 3
-          scripts/ci-run.sh "auval" auval -v aufx HuR1 HuRg
+          scripts/ci-run.sh "auval" script -q /dev/null auval -v aufx HuR1 HuRg
 
       - name: Validate VST3 (pluginval)
         continue-on-error: true

@@ -426,6 +426,39 @@ static void testChain (double sr)
     }
 }
 
+static void testReprepare()
+{
+    std::cout << "[re-prepare / odd host behaviour (auval-style)]\n";
+    HumRigProcessor p; cleanSetup (p, true);
+    juce::MidiBuffer midi;
+    bool allOk = true; int runs = 0;
+    for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0, 22050.0, 11025.0, 8000.0, 88200.0 })
+    {
+        auto hum = makeHum (sr, 0.6, [] (double t) { return 160.0 + 60.0 * t; }, -40.f);
+        for (auto [ic, oc] : { std::pair { 2, 2 }, { 1, 1 }, { 1, 2 }, { 2, 1 }, { 2, 2 } })
+            for (int declared : { 1, 64, 512, 1156, 4096 })
+                for (int actualMul : { 1, 3 })              // host may exceed its declared max block
+                {
+                    if (! setLayout (p, ic, oc)) continue;
+                    p.setRateAndBufferSizeDetails (sr, declared);
+                    p.prepareToPlay (sr, declared);
+                    const int actual = std::min (declared * actualMul, 8192);
+                    const int chs = std::max (ic, oc);
+                    for (size_t pos = 0; pos < hum.size(); pos += (size_t) actual)
+                    {
+                        const int n = (int) std::min ((size_t) actual, hum.size() - pos);
+                        juce::AudioBuffer<float> buf (chs, n);
+                        for (int c = 0; c < chs; ++c) { if (c < ic) buf.copyFrom (c, 0, hum.data() + pos, n); else buf.clear (c, 0, n); }
+                        p.processBlock (buf, midi);
+                        for (int c = 0; c < chs; ++c)
+                            for (int i = 0; i < n; ++i) if (! std::isfinite (buf.getSample (c, i)) || std::fabs (buf.getSample (c, i)) > 8.f) allOk = false;
+                    }
+                    ++runs;
+                }
+    }
+    CHECK (allOk, "survived " << runs << " prepare/process combinations (rates 8k-192k, blocks 1-8192, all layouts), output finite");
+}
+
 static void testPresetsAndState()
 {
     std::cout << "[presets & state]\n";
@@ -468,6 +501,7 @@ int main (int argc, char** argv)
     testScale();
     testDetector();
     testLayouts();
+    testReprepare();
     testPresetsAndState();
     testPitchCorrection (48000.0);
     testPitchCorrection (44100.0);

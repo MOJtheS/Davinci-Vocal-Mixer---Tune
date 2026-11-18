@@ -4,3 +4,4 @@ third_party/
 *.wav
 *.png
 .DS_Store
+build-asan/

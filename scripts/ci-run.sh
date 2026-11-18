@@ -7,7 +7,7 @@ title="$1"; shift
 code=$?
 cat ci-step.log
 if [ $code -ne 0 ]; then
-  msg=$(tail -n 40 ci-step.log | sed -e 's/%/%25/g' -e ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
+  msg=$(tail -n 60 ci-step.log | sed -e 's/%/%25/g' -e ':a;N;$!ba;s/\r//g;s/\n/%0A/g')
   echo "::error title=${title} (exit ${code})::${msg}"
 else
   echo "::notice title=${title}::OK"
