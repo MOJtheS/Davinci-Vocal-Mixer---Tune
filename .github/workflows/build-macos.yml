@@ -1,0 +1,82 @@
+name: Build HumRig (macOS)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write            # needed to attach the zip to a GitHub Release
+
+jobs:
+  macos:
+    runs-on: macos-14          # Apple Silicon runner; builds a universal (arm64 + x86_64) binary
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G Xcode -DHUMRIG_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build plugin (AU + VST3) and test harness
+        run: |
+          cmake --build build --config Release --target HumRig_AU HumRig_VST3 HumRigTests -j 4
+
+      - name: Collect + ad-hoc sign
+        run: |
+          mkdir -p dist/Components dist/VST3
+          AU=$(find build -type d -name "HumRig.component" | head -n 1)
+          VST=$(find build -type d -name "HumRig.vst3" | head -n 1)
+          cp -R "$AU"  dist/Components/
+          cp -R "$VST" dist/VST3/
+          codesign --force --deep --sign - dist/Components/HumRig.component
+          codesign --force --deep --sign - dist/VST3/HumRig.vst3
+          lipo -archs "dist/VST3/HumRig.vst3/Contents/MacOS/HumRig" || true
+          cp INSTALL_FA.md dist/
+          cp scripts/install-mac.command dist/ || true
+          chmod +x dist/install-mac.command || true
+
+      - name: Validate Audio Unit (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          cp -R dist/Components/HumRig.component "$HOME/Library/Audio/Plug-Ins/Components/"
+          killall -9 AudioComponentRegistrar || true
+          sleep 3
+          auval -a | grep -i HuRg || true
+          auval -v aufx HuR1 HuRg
+
+      - name: Validate VST3 (pluginval)
+        continue-on-error: true
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process --skip-gui-tests dist/VST3/HumRig.vst3
+
+      - name: Package
+        run: |
+          cd dist && zip -qry ../HumRig-macOS.zip .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HumRig-macOS
+          path: HumRig-macOS.zip
+
+      - name: Run DSP / processor tests
+        continue-on-error: true      # report, but never block the plugin artifact
+        run: |
+          mkdir -p test-out
+          "$(find build -type f -name HumRigTests -perm +111 | head -n 1)" test-out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-output
+          path: test-out/
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: HumRig-macOS.zip
