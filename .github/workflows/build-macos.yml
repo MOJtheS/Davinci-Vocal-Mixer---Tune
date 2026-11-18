@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   macos:
-    runs-on: macos-14          # Apple Silicon runner; builds a universal (arm64 + x86_64) binary
+    runs-on: macos-latest      # universal (arm64 + x86_64) binary is built on any macOS runner
     steps:
       - uses: actions/checkout@v4
 
