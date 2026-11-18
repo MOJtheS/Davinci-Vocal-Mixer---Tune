@@ -37,6 +37,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 struct Preset
 {
+    const char* genre;   // menu section: General / Pop / Rap / Rock / Classic Rock / Metal
     const char* name;
     float warmth, presence, air, comp, deess, drive;
     float revMix, revSize, revDecay;

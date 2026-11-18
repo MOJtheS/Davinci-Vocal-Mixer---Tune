@@ -5,3 +5,5 @@ third_party/
 *.png
 .DS_Store
 build-asan/
+research_notes/
+reports/

@@ -49,6 +49,34 @@ xattr -cr ~/Library/Audio/Plug-Ins/Components/HumRig.component ~/Library/Audio/P
 - روی تراک **Mono** هم کار می‌کند (بهترین حالت برای زمزمه).
 - اگر نت تشخیص داده نشد، نمایشگر مشکی بالای knobها «no pitch» نشان می‌دهد؛ **Range** را عوض کن یا Input را بالا ببر.
 
+## ۳.۱) قابلیت‌های نسخهٔ ۰.۲
+
+### دکمهٔ Listening (بالای پنجره، صورتی)
+1. فقط **همان تراک وکال** را پلی کن (بقیهٔ HumRig‌ها را سولو/بی‌صدا کن).
+2. روی **Listening** کلیک کن. درصد پیشرفت نشان داده می‌شود (حدود ۶ ثانیه صدای خوانده‌شده لازم است).
+3. وقتی تمام شد پلاگین خودش این‌ها را تنظیم می‌کند: **Key و Scale** (Major/Minor)، **Male/Female و Range**،
+   **Input و Comp**، **Warmth / Presence / Air** و **De-Esser**. نتیجه روی دکمه نوشته می‌شود (مثلاً «A minor | male»).
+4. تنظیمات یک نقطهٔ شروع هوشمندانه است (روش ابتکاری)؛ بعدش با گوش خودت دقیق‌ترش کن. دوباره کلیک = تحلیل جدید؛ وسط کار کلیک = لغو.
+
+### نشانگرهای زنده (Realtime)
+GR meter، نوارهای INPUT/OUTPUT و نمایشگر نت حالا حتی در صفحهٔ **Edit/Cut** هم هنگام پخش حرکت می‌کنند
+(داوینچی پنجرهٔ پلاگین را روی یک نمونه و صدا را روی نمونهٔ دیگری پردازش می‌کند؛ پلاگین این دو را وصل می‌کند).
+اگر چند HumRig همزمان پلی می‌شوند، نشانگرها آخرین نمونهٔ فعال را نشان می‌دهند.
+
+### ۲۵ پریست خواننده‌ها (منوی Preset، به تفکیک ژانر)
+بر اساس تحقیق عمیق دربارهٔ زنجیرهٔ وکال هنرمندان Billboard (گزارش کامل: `docs/vocal-mix-research-fa.md`). **جهت** تنظیمات (خشک/خیس، فشرده/نرم،
+تیون سخت/بدون تیون) از منابع مستند است؛ **عددهای دقیق دستگیره‌ها تفسیر ما هستند**، نه اندازه‌گیری واقعی.
+
+| ژانر | پریست‌ها |
+|---|---|
+| Pop | Olivia Rodrigo، Billie Eilish، Taylor Swift، Ariana Grande، The Weeknd (کم‌مستند) |
+| Rap | Future، Lil Baby، Kendrick Lamar، 21 Savage، Eminem |
+| Rock | Panic! At The Disco، Paramore، Foo Fighters، Twenty One Pilots (کم‌اطمینان)، Imagine Dragons (کم‌اطمینان) |
+| Classic Rock | Stevie Nicks / Fleetwood Mac، Don Henley / Eagles، Freddie Mercury / Queen، Brian Johnson / AC-DC، Robert Plant / Led Zeppelin |
+| Metal | James Hetfield / Metallica، August Burns Red، Bring Me The Horizon، Lamb of God، David Draiman / Disturbed (قدیمی/کم‌اطمینان) |
+
+نکته: Classic Rock و Metal مستندات کمتری دارند. دیلی‌های میلی‌ثانیه‌ای (مثل ۴۰/۸۰ms) با 1/16 تقریب زده شده‌اند.
+
 ## ۴) اگر مشکلی بود
 
 | مشکل | راه‌حل |

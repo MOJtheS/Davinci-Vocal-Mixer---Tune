@@ -61,6 +61,12 @@ struct Biquad
         const double w = 2.0 * pi * f / sr, c = std::cos (w), al = std::sin (w) / (2.0 * q);
         setRaw ((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + al, -2 * c, 1 - al);
     }
+    void makeBandPass (double sr, double f, double q) noexcept   // constant 0 dB peak gain
+    {
+        f = safeFreq (sr, f);
+        const double w = 2.0 * pi * f / sr, c = std::cos (w), al = std::sin (w) / (2.0 * q);
+        setRaw (al, 0.0, -al, 1 + al, -2 * c, 1 - al);
+    }
     void makeLowPass (double sr, double f, double q) noexcept
     {
         f = safeFreq (sr, f);

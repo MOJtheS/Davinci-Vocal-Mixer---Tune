@@ -73,13 +73,28 @@ private:
 class LevelBar : public juce::Component, private juce::Timer
 {
 public:
-    LevelBar (std::atomic<float>& source, juce::String label);
+    LevelBar (std::function<float()> source, juce::String label);
     void paint (juce::Graphics&) override;
 private:
     void timerCallback() override;
-    std::atomic<float>& src;
+    std::function<float()> src;
     juce::String text;
     float shown = 0.f;
+};
+
+// "Listening" button: click -> analyses the incoming audio during playback and sets key/scale, voice, gain, comp, EQ, de-esser.
+class ListenButton : public juce::Component, private juce::Timer
+{
+public:
+    explicit ListenButton (HumRigProcessor&);
+    void paint (juce::Graphics&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+private:
+    void timerCallback() override;
+    HumRigProcessor& proc;
+    int pendingGen = -1;
+    bool applied = false;
+    juce::String summary;
 };
 
 class PitchReadout : public juce::Component, private juce::Timer
@@ -116,6 +131,7 @@ private:
     GainReductionMeter grMeter;
     PitchReadout pitchOut;
     LevelBar inBar, outBar;
+    ListenButton listenBtn;
 
     KnobBox warmth, presence, air, comp, deess, drive;
     KnobBox speed, vibrato, flex;

@@ -2,6 +2,7 @@
 // Run: ./HumRigTests [outdir]   (writes WAV/PNG debug files to outdir, default ./test-out)
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <random>
 #include <vector>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -10,6 +11,7 @@
 #include "Editor/PluginEditor.h"
 #include "DSP/PitchDetector.h"
 #include "DSP/Scale.h"
+#include "DSP/ListeningAnalyzer.h"
 
 using namespace humrig;
 
@@ -324,6 +326,96 @@ static void testImpulse (double sr)
     }
 }
 
+static std::vector<float> makeMelody (double sr, double seconds, const std::vector<int>& notes, float amp = 1.f, float noiseDb = -200.f)
+{
+    auto x = makeHum (sr, seconds, [&notes] (double t) { return midiToHz (notes[(size_t) (t / 0.4) % notes.size()]); }, noiseDb);
+    for (auto& v : x) v *= amp;
+    return x;
+}
+
+static ListeningAnalyzer::Result analyse (const std::vector<float>& x, double sr)
+{
+    ListeningAnalyzer a; a.prepare (sr);
+    for (size_t pos = 0; pos < x.size() && ! a.isDone(); pos += 256)
+        a.process (x.data() + pos, (int) std::min<size_t> (256, x.size() - pos));
+    return a.result();
+}
+
+static void testListening()
+{
+    std::cout << "[listening analyzer]\n";
+    const double sr = 48000;
+    const std::vector<int> aMinorMale = { 45, 48, 52, 48, 45, 43, 40, 45, 47, 48, 47, 45, 40, 45 };   // A2..E3 (male hum range)
+    const std::vector<int> cMajorFemale = { 60, 64, 67, 64, 60, 62, 65, 64, 62, 60, 67, 64, 60, 64 };
+
+    auto a = analyse (makeMelody (sr, 14.0, aMinorMale, 0.25f / 1.f), sr);
+    CHECK (a.valid && a.key == 9 && a.minor, "male melody in A minor -> key " << a.key << (a.minor ? " minor" : " major") << " (want 9 minor)");
+    CHECK (! a.female && a.medianF0 > 70.f && a.medianF0 < 165.f, "male register detected (median f0 " << a.medianF0 << " Hz)");
+
+    auto c = analyse (makeMelody (sr, 14.0, cMajorFemale, 0.25f), sr);
+    CHECK (c.valid && c.key == 0 && ! c.minor, "female melody in C major -> key " << c.key << (c.minor ? " minor" : " major") << " (want 0 major)");
+    CHECK (c.female, "female register detected (median f0 " << c.medianF0 << " Hz)");
+
+    auto quiet = analyse (makeMelody (sr, 14.0, aMinorMale, 0.01f), sr);
+    auto loud  = analyse (makeMelody (sr, 14.0, aMinorMale, 0.9f), sr);
+    CHECK (quiet.inGainDb > loud.inGainDb + 10.f, "gain suggestion: quiet " << quiet.inGainDb << " dB vs loud " << loud.inGainDb << " dB");
+
+    // sibilance: add 7 kHz band noise to the same melody
+    {
+        std::mt19937 rng (4); std::normal_distribution<float> nd (0.f, 1.f);
+        Biquad bp; bp.makeBandPass (sr, 7000.0, 1.5);
+        auto base = makeMelody (sr, 14.0, aMinorMale, 0.25f);
+        auto sibilant = base;
+        for (auto& v : sibilant) v += 0.03f * bp.process (nd (rng));
+        auto r0 = analyse (base, sr), r1 = analyse (sibilant, sr);
+        CHECK (r1.valid && r1.deess > r0.deess + 10.f, "de-esser suggestion rises with sibilance (" << r0.deess << " -> " << r1.deess << ")");
+    }
+    // spectral balance: a dull (low-passed) take should want more Presence/Air than the original
+    {
+        auto base = makeMelody (sr, 14.0, aMinorMale, 0.25f, -45.f);
+        auto dull = base;
+        Biquad lp; lp.makeLowPass (sr, 1500.0, 0.707);
+        for (auto& v : dull) v = lp.process (v);
+        auto r0 = analyse (base, sr), r1 = analyse (dull, sr);
+        CHECK (r1.presence > r0.presence || r1.air > r0.air, "dull take suggests more presence/air (presence " << r0.presence << " -> " << r1.presence << ", air " << r0.air << " -> " << r1.air << ")");
+    }
+    CHECK (analyse (std::vector<float> ((size_t) (sr * 3), 0.f), sr).valid == false, "silence produces no result");
+}
+
+static void testBusAndListeningE2E()
+{
+    std::cout << "[shared bus: editor instance vs. processing instance]\n";
+    const double sr = 48000;
+    HumRigProcessor ui;          // the instance that owns the editor / buttons
+    HumRigProcessor engine;      // the instance the host actually feeds audio to
+    cleanSetup (engine, true); cleanSetup (ui, true);
+    setLayout (engine, 1, 1); engine.setRateAndBufferSizeDetails (sr, 256); engine.prepareToPlay (sr, 256);
+    setLayout (ui, 1, 1); ui.setRateAndBufferSizeDetails (sr, 256); ui.prepareToPlay (sr, 256);
+
+    const int gen = ui.requestListening();
+    auto melody = makeMelody (sr, 16.0, { 45, 48, 52, 48, 45, 43, 40, 45, 47, 48, 47, 45, 40, 45 }, 0.25f);
+    juce::MidiBuffer midi;
+    float lastProgress = 0.f; bool progressed = false;
+    float uiInPeak = 0.f, uiGr = 0.f;
+    for (size_t pos = 0; pos + 256 <= melody.size() && HumRigProcessor::bus().listenState.load() == SharedBus::listening; pos += 256)
+    {
+        juce::AudioBuffer<float> b (1, 256); b.copyFrom (0, 0, melody.data() + pos, 256);
+        engine.processBlock (b, midi);
+        const float p = HumRigProcessor::bus().listenProgress.load();
+        if (p > lastProgress + 0.05f) { progressed = true; lastProgress = p; }
+        const auto m = ui.getMeters();                  // UI instance never processed a sample
+        uiInPeak = std::max (uiInPeak, m.inPeak); uiGr = std::min (uiGr, m.grDb);
+    }
+    CHECK (HumRigProcessor::bus().listenState.load() == SharedBus::done, "listening finished on the processing instance");
+    CHECK (progressed, "progress advanced while listening (reached " << lastProgress << ")");
+    CHECK (ui.getMeters().inPeak >= 0.f && uiInPeak > 0.05f, "UI instance sees the other instance's input level (" << uiInPeak << ") although it processes nothing");
+    CHECK (ui.applyListeningResults (gen), "UI instance applied the result");
+    CHECK ((int) ui.apvts.getRawParameterValue (ID::key)->load() == 9 && (int) ui.apvts.getRawParameterValue (ID::scale)->load() == 2,
+           "parameters set: key A, scale Minor");
+    CHECK ((int) ui.apvts.getRawParameterValue (ID::voice)->load() == 0, "parameters set: voice Male");
+    CHECK (! ui.applyListeningResults (gen + 7), "stale generation is not applied");
+}
+
 static void testRobustness (double sr)
 {
     std::cout << "[robustness @ " << (int) sr << " Hz]\n";
@@ -475,7 +567,21 @@ static void testPresetsAndState()
 {
     std::cout << "[presets & state]\n";
     HumRigProcessor p;
-    CHECK (p.getNumPrograms() >= 8, "has " << p.getNumPrograms() << " presets");
+    CHECK (p.getNumPrograms() == 34, "has " << p.getNumPrograms() << " presets (9 general + 25 artist)");
+    {
+        std::map<std::string, int> perGenre;
+        for (int i = 0; i < getNumPresets(); ++i) ++perGenre[getPreset (i).genre];
+        CHECK (perGenre["Pop"] == 5 && perGenre["Rap"] == 5 && perGenre["Rock"] == 5 && perGenre["Classic Rock"] == 5 && perGenre["Metal"] == 5,
+               "5 artist presets in each of Pop / Rap / Rock / Classic Rock / Metal");
+        bool inRange = true;
+        for (int i = 0; i < getNumPresets(); ++i)
+        {
+            const auto& q = getPreset (i);
+            for (float v : { q.warmth, q.presence, q.air, q.comp, q.deess, q.drive, q.dlyFb, q.speed, q.vibrato, q.flex }) if (v < 0.f || v > 100.f) inRange = false;
+            if (q.dlyTime < 0 || q.dlyTime > 2 || q.revDecay < 0.2f || q.revDecay > 8.f || q.revMix < kMixOffDb || q.revMix > 0.f) inRange = false;
+        }
+        CHECK (inRange, "every preset value is inside its parameter range");
+    }
     p.setCurrentProgram (4);
     CHECK (std::string (p.getProgramName (4).toRawUTF8()) == "K-Pop", "program 4 is K-Pop");
     const float warmth = p.apvts.getRawParameterValue (ID::warmth)->load();
@@ -514,6 +620,8 @@ int main (int argc, char** argv)
     testDetector();
     testLayouts();
     testReprepare();
+    testListening();
+    testBusAndListeningE2E();
     testPresetsAndState();
     testPitchCorrection (48000.0);
     testPitchCorrection (44100.0);

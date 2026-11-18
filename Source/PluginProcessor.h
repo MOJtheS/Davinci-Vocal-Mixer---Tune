@@ -8,6 +8,8 @@
 #include "DSP/Dynamics.h"
 #include "DSP/Effects.h"
 #include "DSP/PitchCorrector.h"
+#include "DSP/ListeningAnalyzer.h"
+#include "SharedBus.h"
 
 class HumRigProcessor : public juce::AudioProcessor
 {
@@ -49,6 +51,17 @@ public:
     float detectedMidi() const { return corrector.detectedMidi.load(); }
     float targetMidi() const   { return corrector.targetMidi.load(); }
 
+    // Meters as the UI should show them: this instance's own values while it is processing audio, otherwise the
+    // most recently active HumRig instance in the process (hosts often process audio on a different instance than the editor's).
+    struct MeterSnapshot { float grDb = 0.f, inPeak = 0.f, outPeak = 0.f, detectedMidi = -1.f, targetMidi = -1.f; };
+    MeterSnapshot getMeters() const;
+
+    // "Listening" (message thread): request an analysis / cancel it / apply a finished result to this instance's parameters.
+    int  requestListening();                       // returns the generation id to pass to applyListeningResults
+    void cancelListening();
+    bool applyListeningResults (int generation);   // true if a result for `generation` was applied
+    static humrig::SharedBus& bus() { return humrig::SharedBus::get(); }
+
 private:
     struct Params
     {
@@ -75,11 +88,16 @@ private:
     std::array<std::vector<float>, 2> dryRing;   // latency-aligned dry for the Dry/Wet control
     int dryPos = 0;
 
-    std::vector<float> monoIn, monoTuned, voice, dlyL, dlyR, revL, revR;
+    std::vector<float> monoRaw, monoIn, monoTuned, voice, dlyL, dlyR, revL, revR;
     juce::SmoothedValue<float> inGainSm, outGainSm, mixSm;
 
     float lastVoice = -1.f, lastWarmth = -1.f, lastPresence = -1.f, lastAir = -1.f;
     int currentPreset = 0;
+
+    humrig::ListeningAnalyzer analyzer;
+    bool analyzing = false;
+    int  handledGen = 0, instanceId = 0;
+    std::atomic<int64_t> ownLastActiveMs { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HumRigProcessor)
 };

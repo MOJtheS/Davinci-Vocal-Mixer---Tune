@@ -17,6 +17,8 @@ HumRigProcessor::HumRigProcessor()
     p.revMix = g (ID::revMix); p.revSize = g (ID::revSize); p.revDecay = g (ID::revDecay);
     p.dlyMix = g (ID::dlyMix); p.dlyFb = g (ID::dlyFb); p.dlyTime = g (ID::dlyTime); p.dlyPing = g (ID::dlyPing);
     p.inGain = g (ID::inGain); p.outGain = g (ID::outGain); p.mix = g (ID::mix);
+    instanceId = SharedBus::get().nextInstanceId();
+    handledGen = SharedBus::get().requestGen.load();
 }
 
 bool HumRigProcessor::isBusesLayoutSupported (const BusesLayout& l) const
@@ -44,7 +46,10 @@ void HumRigProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     for (auto& r : dryRing) r.assign ((size_t) std::max (1, corrector.getLatencySamples()), 0.f);
     dryPos = 0;
 
-    for (auto* v : { &monoIn, &monoTuned, &voice, &dlyL, &dlyR, &revL, &revR }) v->assign ((size_t) maxBlock, 0.f);
+    analyzer.prepare (sr);
+    handledGen = SharedBus::get().requestGen.load();                       // hosts may re-prepare when playback starts:
+    analyzing = SharedBus::get().listenState.load() == SharedBus::listening;   // keep listening if a request is already running
+    for (auto* v : { &monoRaw, &monoIn, &monoTuned, &voice, &dlyL, &dlyR, &revL, &revR }) v->assign ((size_t) maxBlock, 0.f);
 
     inGainSm.reset (sr, 0.02);  inGainSm.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (p.inGain->load()));
     outGainSm.reset (sr, 0.02); outGainSm.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (p.outGain->load()));
@@ -125,6 +130,13 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     float grMin = 0.f, inPeak = 0.f, outPeak = 0.f;
     bool sawBad = false;
 
+    auto& sharedBus = SharedBus::get();
+    {
+        const int gen = sharedBus.requestGen.load();
+        if (gen != handledGen) { handledGen = gen; analyzer.reset(); analyzing = sharedBus.listenState.load() == SharedBus::listening; }
+        if (analyzing && sharedBus.listenState.load() != SharedBus::listening) analyzing = false;   // cancelled / finished elsewhere
+    }
+
     for (int start = 0; start < total; start += maxBlock)
     {
         const int n = std::min (maxBlock, total - start);
@@ -137,8 +149,32 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         for (int i = 0; i < n; ++i)
         {
             const float g = inGainSm.getNextValue();
-            mi[i] = 0.5f * (inL[i] + inR[i]) * g;
+            const float raw = 0.5f * (inL[i] + inR[i]);
+            mi[i] = raw * g;
+            if (analyzing) monoRaw[(size_t) i] = raw;
             inPeak = std::max (inPeak, std::fabs (mi[i]));
+        }
+
+        if (analyzing)
+        {
+            analyzer.process (monoRaw.data(), n);
+            sharedBus.raiseProgress (analyzer.progress());
+            if (analyzer.isDone())
+            {
+                int expected = SharedBus::listening;
+                if (sharedBus.listenState.compare_exchange_strong (expected, SharedBus::writing))   // first instance to finish wins
+                {
+                    const auto r = analyzer.result();
+                    auto& o = sharedBus.result;
+                    o.key = r.key; o.minor = r.minor ? 1 : 0; o.female = r.female ? 1 : 0; o.range = r.range;
+                    o.medianF0 = r.medianF0; o.keyConfidence = r.keyConfidence; o.inGainDb = r.inGainDb;
+                    o.comp = r.comp; o.warmth = r.warmth; o.presence = r.presence; o.air = r.air; o.deess = r.deess;
+                    sharedBus.resultGen.store (handledGen);
+                    sharedBus.listenProgress.store (1.f);
+                    sharedBus.listenState.store (r.valid ? SharedBus::done : SharedBus::idle);
+                }
+                analyzing = false;
+            }
         }
 
         // pitch stage (constant latency)
@@ -204,6 +240,70 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     grDbMeter.store (grMin);
     inLevelMeter.store (inPeak);
     outLevelMeter.store (outPeak);
+
+    // publish for UIs living on another instance (see SharedBus)
+    const bool active = inPeak > 1.0e-4f;
+    const int64_t now = juce::Time::currentTimeMillis();
+    if (active) ownLastActiveMs.store (now);
+    if (active || sharedBus.activeInstance.load() == instanceId)
+    {
+        sharedBus.grDb.store (grMin); sharedBus.inPeak.store (inPeak); sharedBus.outPeak.store (outPeak);
+        sharedBus.detectedMidi.store (corrector.detectedMidi.load()); sharedBus.targetMidi.store (corrector.targetMidi.load());
+        sharedBus.activeInstance.store (instanceId);
+        if (active) sharedBus.lastActiveMs.store (now);
+    }
+}
+
+HumRigProcessor::MeterSnapshot HumRigProcessor::getMeters() const
+{
+    const int64_t now = juce::Time::currentTimeMillis();
+    MeterSnapshot m;
+    auto& b = SharedBus::get();
+    if (now - ownLastActiveMs.load() > 400 && now - b.lastActiveMs.load() < 400)
+    {
+        m.grDb = b.grDb.load(); m.inPeak = b.inPeak.load(); m.outPeak = b.outPeak.load();
+        m.detectedMidi = b.detectedMidi.load(); m.targetMidi = b.targetMidi.load();
+    }
+    else
+    {
+        m.grDb = grDbMeter.load(); m.inPeak = inLevelMeter.load(); m.outPeak = outLevelMeter.load();
+        m.detectedMidi = corrector.detectedMidi.load(); m.targetMidi = corrector.targetMidi.load();
+    }
+    return m;
+}
+
+int HumRigProcessor::requestListening()
+{
+    auto& b = SharedBus::get();
+    b.listenProgress.store (0.f);
+    b.listenState.store (SharedBus::listening);   // state first, so instances that see the new generation also see "listening"
+    return b.requestGen.fetch_add (1) + 1;
+}
+
+void HumRigProcessor::cancelListening()
+{
+    int expected = SharedBus::listening;
+    SharedBus::get().listenState.compare_exchange_strong (expected, SharedBus::idle);
+}
+
+bool HumRigProcessor::applyListeningResults (int generation)
+{
+    auto& b = SharedBus::get();
+    if (b.listenState.load() != SharedBus::done || b.resultGen.load() != generation) return false;
+    auto set = [this] (const char* id, float v)
+    {
+        if (auto* prm = apvts.getParameter (id)) prm->setValueNotifyingHost (prm->convertTo0to1 (v));
+    };
+    const auto& r = b.result;
+    set (ID::key, (float) r.key.load());
+    set (ID::scale, r.minor.load() ? 2.f : 1.f);              // Minor : Major
+    set (ID::voice, r.female.load() ? 1.f : 0.f);
+    set (ID::range, (float) r.range.load());
+    set (ID::inGain, r.inGainDb.load());
+    set (ID::comp, r.comp.load());
+    set (ID::warmth, r.warmth.load()); set (ID::presence, r.presence.load()); set (ID::air, r.air.load());
+    set (ID::deess, r.deess.load());
+    return true;
 }
 
 // ---------------- presets / programs / state ----------------

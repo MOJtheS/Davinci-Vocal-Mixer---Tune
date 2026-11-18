@@ -168,10 +168,11 @@ void ChoiceSegment::mouseUp (const juce::MouseEvent& e)
 GainReductionMeter::GainReductionMeter (HumRigProcessor& p) : proc (p) { startTimerHz (30); }
 void GainReductionMeter::timerCallback()
 {
-    gr = proc.grDbMeter.load();
+    const auto m = proc.getMeters();
+    gr = m.grDb;
     const float target = std::clamp (-gr, 0.f, 20.f);
     shown += (target - shown) * 0.35f;
-    level += (proc.inLevelMeter.load() - level) * 0.4f;
+    level += (m.inPeak - level) * 0.4f;
     repaint();
 }
 void GainReductionMeter::paint (Graphics& g)
@@ -213,10 +214,10 @@ void GainReductionMeter::paint (Graphics& g)
     g.drawText (juce::String (gr, 1) + " dB", tag, juce::Justification::centred);
 }
 
-LevelBar::LevelBar (std::atomic<float>& s, juce::String l) : src (s), text (std::move (l)) { startTimerHz (30); }
+LevelBar::LevelBar (std::function<float()> s, juce::String l) : src (std::move (s)), text (std::move (l)) { startTimerHz (30); }
 void LevelBar::timerCallback()
 {
-    const float db = juce::Decibels::gainToDecibels (src.load(), -60.f);
+    const float db = juce::Decibels::gainToDecibels (src(), -60.f);
     const float target = juce::jlimit (0.f, 1.f, (db + 60.f) / 60.f);
     shown = target > shown ? target : shown + (target - shown) * 0.15f;
     repaint();
@@ -236,7 +237,8 @@ void LevelBar::paint (Graphics& g)
 PitchReadout::PitchReadout (HumRigProcessor& p) : proc (p) { startTimerHz (30); }
 void PitchReadout::timerCallback()
 {
-    detected = proc.detectedMidi(); target = proc.targetMidi();
+    const auto m = proc.getMeters();
+    detected = m.detectedMidi; target = m.targetMidi;
     repaint();
 }
 static juce::String noteName (int midi)
@@ -259,11 +261,64 @@ void PitchReadout::paint (Graphics& g)
                 b.withLeft (b.getRight() - b.getWidth() * 0.40f), juce::Justification::centred);
 }
 
+// ------------------------------------------------------------ Listening button
+static juce::String keyLabel (int key, bool minor)
+{
+    static const char* n[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    return juce::String (n[juce::jlimit (0, 11, key)]) + (minor ? " minor" : " major");
+}
+
+ListenButton::ListenButton (HumRigProcessor& p) : proc (p) { startTimerHz (20); }
+
+void ListenButton::mouseUp (const juce::MouseEvent& e)
+{
+    if (! getLocalBounds().contains (e.getPosition())) return;
+    auto& b = HumRigProcessor::bus();
+    if (b.listenState.load() == SharedBus::listening) { proc.cancelListening(); pendingGen = -1; }
+    else { applied = false; summary = {}; pendingGen = proc.requestListening(); }
+    repaint();
+}
+
+void ListenButton::timerCallback()
+{
+    auto& b = HumRigProcessor::bus();
+    if (pendingGen >= 0 && ! applied && b.listenState.load() == SharedBus::done && b.resultGen.load() == pendingGen)
+    {
+        if (proc.applyListeningResults (pendingGen))
+        {
+            applied = true;
+            const auto& r = b.result;
+            summary = keyLabel (r.key.load(), r.minor.load() != 0) + (r.female.load() ? "  |  female" : "  |  male");
+        }
+    }
+    repaint();
+}
+
+void ListenButton::paint (Graphics& g)
+{
+    auto& b = HumRigProcessor::bus();
+    const bool listening = b.listenState.load() == SharedBus::listening && pendingGen >= 0;
+    auto r = getLocalBounds().toFloat();
+    g.setGradientFill (juce::ColourGradient (accentA, r.getX(), r.getY(), accentB, r.getRight(), r.getBottom(), false));
+    g.fillRoundedRectangle (r, r.getHeight() / 2.f);
+    if (listening)   // progress sheen
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.22f));
+        g.fillRoundedRectangle (r.withWidth (std::max (r.getHeight(), r.getWidth() * b.listenProgress.load())), r.getHeight() / 2.f);
+    }
+    g.setColour (juce::Colours::white);
+    g.setFont (fontOf (13.f, true));
+    juce::String label = "Listening";
+    if (listening)  label << " " << juce::roundToInt (b.listenProgress.load() * 100.f) << "%";
+    else if (applied) label = "Listened  -  " + summary;
+    g.drawText (label, r, juce::Justification::centred);
+}
+
 // ------------------------------------------------------------ editor
 HumRigEditor::HumRigEditor (HumRigProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
       voiceSeg (p.apvts, ID::voice, { "Male", "Female" }, true),
-      grMeter (p), pitchOut (p), inBar (p.inLevelMeter, "INPUT"), outBar (p.outLevelMeter, "OUTPUT"),
+      grMeter (p), pitchOut (p), inBar ([&p] { return p.getMeters().inPeak; }, "INPUT"), outBar ([&p] { return p.getMeters().outPeak; }, "OUTPUT"), listenBtn (p),
       warmth (p.apvts, ID::warmth, "Warmth"), presence (p.apvts, ID::presence, "Presence"), air (p.apvts, ID::air, "Air"),
       comp (p.apvts, ID::comp, "Comp"), deess (p.apvts, ID::deess, "De-Esser"), drive (p.apvts, ID::drive, "Drive"),
       speed (p.apvts, ID::speed, "Speed"), vibrato (p.apvts, ID::vibrato, "Vibrato"), flex (p.apvts, ID::flex, "Flex"),
@@ -282,14 +337,21 @@ HumRigEditor::HumRigEditor (HumRigProcessor& p)
     keyAtt   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, ID::key, keyBox);
     scaleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, ID::scale, scaleBox);
 
-    for (int i = 0; i < getNumPresets(); ++i) presetBox.addItem (getPreset (i).name, i + 1);
-    presetBox.setSelectedItemIndex (proc.getCurrentProgram(), juce::dontSendNotification);
-    presetBox.onChange = [this] { proc.applyPreset (presetBox.getSelectedItemIndex()); };
-    prevBtn.onClick = [this] { presetBox.setSelectedItemIndex ((presetBox.getSelectedItemIndex() + getNumPresets() - 1) % getNumPresets(), juce::sendNotification); };
-    nextBtn.onClick = [this] { presetBox.setSelectedItemIndex ((presetBox.getSelectedItemIndex() + 1) % getNumPresets(), juce::sendNotification); };
+    {
+        juce::String lastGenre;
+        for (int i = 0; i < getNumPresets(); ++i)
+        {
+            if (lastGenre != getPreset (i).genre) { lastGenre = getPreset (i).genre; presetBox.addSectionHeading (lastGenre); }
+            presetBox.addItem (getPreset (i).name, i + 1);
+        }
+    }
+    presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);
+    presetBox.onChange = [this] { proc.applyPreset (presetBox.getSelectedId() - 1); };
+    prevBtn.onClick = [this] { presetBox.setSelectedId ((presetBox.getSelectedId() - 1 + getNumPresets() - 1) % getNumPresets() + 1, juce::sendNotification); };
+    nextBtn.onClick = [this] { presetBox.setSelectedId ((presetBox.getSelectedId() - 1 + 1) % getNumPresets() + 1, juce::sendNotification); };
 
     for (auto* c : std::initializer_list<juce::Component*> {
-             &presetBox, &prevBtn, &nextBtn, &voiceSeg, &grMeter, &pitchOut, &inBar, &outBar,
+             &presetBox, &prevBtn, &nextBtn, &voiceSeg, &grMeter, &pitchOut, &inBar, &outBar, &listenBtn,
              &warmth, &presence, &air, &comp, &deess, &drive, &speed, &vibrato, &flex,
              &revMix, &revSize, &revDecay, &dlyMix, &dlyFb, &inGain, &outGain, &mixKnob,
              &tuneOn, &ping, &keyBox, &scaleBox, &rangeSeg, &dlyTimeSeg })
@@ -334,6 +396,7 @@ void HumRigEditor::resized()
     auto area = getLocalBounds().reduced (20, 0);
     auto header = area.removeFromTop (70).withTrimmedTop (14);
     voiceSeg.setBounds (header.removeFromRight (150).withSizeKeepingCentre (150, 30));
+    listenBtn.setBounds (190, 27, 235, 30);
     header.removeFromRight (16);
     nextBtn.setBounds (header.removeFromRight (34).withSizeKeepingCentre (34, 30));
     presetBox.setBounds (header.removeFromRight (200).withSizeKeepingCentre (200, 30));
