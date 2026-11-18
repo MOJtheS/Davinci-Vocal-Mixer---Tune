@@ -431,7 +431,7 @@ static void testReprepare()
     std::cout << "[re-prepare / odd host behaviour (auval-style)]\n";
     HumRigProcessor p; cleanSetup (p, true);
     juce::MidiBuffer midi;
-    bool allOk = true; int runs = 0;
+    bool allOk = true; int runs = 0, bad = 0; std::string firstBad;
     for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0, 22050.0, 11025.0, 8000.0, 88200.0 })
     {
         auto hum = makeHum (sr, 0.6, [] (double t) { return 160.0 + 60.0 * t; }, -40.f);
@@ -451,11 +451,23 @@ static void testReprepare()
                         for (int c = 0; c < chs; ++c) { if (c < ic) buf.copyFrom (c, 0, hum.data() + pos, n); else buf.clear (c, 0, n); }
                         p.processBlock (buf, midi);
                         for (int c = 0; c < chs; ++c)
-                            for (int i = 0; i < n; ++i) if (! std::isfinite (buf.getSample (c, i)) || std::fabs (buf.getSample (c, i)) > 8.f) allOk = false;
+                            for (int i = 0; i < n; ++i)
+                            {
+                                const float v = buf.getSample (c, i);
+                                if (! std::isfinite (v) || std::fabs (v) > 8.f)
+                                {
+                                    allOk = false; ++bad;
+                                    if (firstBad.empty())
+                                        firstBad = "sr=" + std::to_string ((int) sr) + " layout=" + std::to_string (ic) + "->" + std::to_string (oc)
+                                                 + " declared=" + std::to_string (declared) + " actual=" + std::to_string (actual)
+                                                 + " ch=" + std::to_string (c) + " sample=" + std::to_string (pos + (size_t) i) + " value=" + std::to_string (v);
+                                }
+                            }
                     }
                     ++runs;
                 }
     }
+    if (! firstBad.empty()) std::cout << "  first offending sample: " << firstBad << "  (" << bad << " bad samples)\n";
     CHECK (allOk, "survived " << runs << " prepare/process combinations (rates 8k-192k, blocks 1-8192, all layouts), output finite");
 }
 

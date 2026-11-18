@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cmath>
 
 namespace humrig
@@ -28,8 +29,12 @@ struct Biquad
 
     static constexpr double pi = 3.14159265358979323846;
 
+    // Filters designed at/above Nyquist are unstable (NaN/Inf). Keep every design frequency below 0.45 * sr.
+    static double safeFreq (double sr, double f) noexcept { return std::min (f, 0.45 * sr); }
+
     void makeLowShelf (double sr, double f, double gainDb) noexcept
     {
+        f = safeFreq (sr, f);
         const double A = std::pow (10.0, gainDb / 40.0), w = 2.0 * pi * f / sr;
         const double c = std::cos (w), s = std::sin (w), al = s / 2.0 * std::sqrt (2.0), t = 2.0 * std::sqrt (A) * al;
         setRaw (A * ((A + 1) - (A - 1) * c + t), 2 * A * ((A - 1) - (A + 1) * c), A * ((A + 1) - (A - 1) * c - t),
@@ -37,6 +42,7 @@ struct Biquad
     }
     void makeHighShelf (double sr, double f, double gainDb) noexcept
     {
+        f = safeFreq (sr, f);
         const double A = std::pow (10.0, gainDb / 40.0), w = 2.0 * pi * f / sr;
         const double c = std::cos (w), s = std::sin (w), al = s / 2.0 * std::sqrt (2.0), t = 2.0 * std::sqrt (A) * al;
         setRaw (A * ((A + 1) + (A - 1) * c + t), -2 * A * ((A - 1) + (A + 1) * c), A * ((A + 1) + (A - 1) * c - t),
@@ -44,17 +50,20 @@ struct Biquad
     }
     void makePeak (double sr, double f, double q, double gainDb) noexcept
     {
+        f = safeFreq (sr, f);
         const double A = std::pow (10.0, gainDb / 40.0), w = 2.0 * pi * f / sr;
         const double c = std::cos (w), al = std::sin (w) / (2.0 * q);
         setRaw (1 + al * A, -2 * c, 1 - al * A, 1 + al / A, -2 * c, 1 - al / A);
     }
     void makeHighPass (double sr, double f, double q) noexcept
     {
+        f = safeFreq (sr, f);
         const double w = 2.0 * pi * f / sr, c = std::cos (w), al = std::sin (w) / (2.0 * q);
         setRaw ((1 + c) / 2, -(1 + c), (1 + c) / 2, 1 + al, -2 * c, 1 - al);
     }
     void makeLowPass (double sr, double f, double q) noexcept
     {
+        f = safeFreq (sr, f);
         const double w = 2.0 * pi * f / sr, c = std::cos (w), al = std::sin (w) / (2.0 * q);
         setRaw ((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + al, -2 * c, 1 - al);
     }

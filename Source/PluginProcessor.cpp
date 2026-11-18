@@ -123,6 +123,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const float revGain = mixDbToLin (p.revMix->load());
 
     float grMin = 0.f, inPeak = 0.f, outPeak = 0.f;
+    bool sawBad = false;
 
     for (int start = 0; start < total; start += maxBlock)
     {
@@ -184,12 +185,20 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             dryPos = (dryPos + 1) % ringN;
 
             const float m = mixSm.getNextValue(), og = outGainSm.getNextValue();
-            const float l = (dL * (1.f - m) + wetL * m) * og;
-            const float r = (dR * (1.f - m) + wetR * m) * og;
+            float l = (dL * (1.f - m) + wetL * m) * og;
+            float r = (dR * (1.f - m) + wetR * m) * og;
+            if (! (std::isfinite (l) && std::isfinite (r))) { sawBad = true; l = r = 0.f; }   // never emit NaN/Inf to the host
+            l = juce::jlimit (-16.f, 16.f, l); r = juce::jlimit (-16.f, 16.f, r);
             if (outR != nullptr) { outL[i] = l; outR[i] = r; }
             else outL[i] = 0.5f * (l + r);
             outPeak = std::max (outPeak, std::fabs (l));
         }
+    }
+
+    if (sawBad)      // something went non-finite: flush all recursive state so it cannot persist
+    {
+        hpf.reset(); lowShelf.reset(); peak.reset(); highShelf.reset();
+        compressor.reset(); deesser.reset(); delay.reset(); reverb.reset(); corrector.reset();
     }
 
     grDbMeter.store (grMin);
