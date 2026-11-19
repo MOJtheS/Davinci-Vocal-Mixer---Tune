@@ -104,6 +104,7 @@ private:
     humrig::LoudnessMeter loudness;
     juce::Reverb reverb;
     int handledLufsGen = 0;
+    bool scopeWriter = false;
     float lastRevLo = -1.f, lastRevHi = -1.f;
     humrig::EqValues lastEqValues;
     bool eqDesigned = false;

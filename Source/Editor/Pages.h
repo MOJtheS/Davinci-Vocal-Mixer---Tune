@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <vector>
+#include <juce_dsp/juce_dsp.h>
 #include "PluginEditor.h"
 
 namespace humrig
@@ -44,17 +45,31 @@ private:
 };
 
 // ---- displays ----
-// EQ response curve drawn from the real filter coefficients.
+// EQ response curve drawn from the real filter coefficients, with a live spectrum behind it (before = grey, after = colour).
+// The five handles can be dragged: left/right = frequency, up/down = gain (Low Cut only has a frequency).
 class EqCurveDisplay : public juce::Component, private juce::Timer
 {
 public:
     explicit EqCurveDisplay (HumRigProcessor&);
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
 private:
     void timerCallback() override;
+    juce::Rectangle<float> plotArea() const { return getLocalBounds().toFloat().reduced (34.f, 16.f); }
+    juce::Point<float> nodePos (int idx) const;
+    int hitTest (juce::Point<float>) const;
+    void ensureManual();
+    void setPlain (const char* id, float value);
+    void updateSpectrum();
     HumRigProcessor& proc;
     EqValues shown;
     bool first = true;
+    int dragging = -1, hover = -1;
+    juce::dsp::FFT fft { 12 };
+    std::vector<float> work, specPre, specPost;
 };
 
 // Scrolling gain-reduction history of the compressor.

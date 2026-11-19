@@ -947,6 +947,30 @@ static void testSpaceColorStereo()
     }
 }
 
+static void testScopeFeed()
+{
+    std::cout << "[spectrum feed]\n";
+    const double sr = 48000.0;
+    auto& bus = HumRigProcessor::bus();
+    const int before = bus.scopePos.load();
+    HumRigProcessor p; cleanSetup (p, false);
+    setParam (p, ID::air, 100.f);
+    auto in = makeSine (sr, 1.0, 1000.0, 0.3f);
+    runProcessor (p, in, sr, 480, 1, 2);
+    CHECK (bus.scopePos.load() - before >= 40000, "processing audio advances the scope feed (" << bus.scopePos.load() - before << " samples)");
+    // Goertzel at 1 kHz over the last 4096 samples of the "after" buffer
+    const int pos = bus.scopePos.load(), N = SharedBus::kScope;
+    auto goertzel = [&] (const std::array<std::atomic<float>, SharedBus::kScope>& src, double f)
+    {
+        const double w = 2.0 * juce::MathConstants<double>::pi * f / sr, c = 2.0 * std::cos (w);
+        double s1 = 0, s2 = 0;
+        for (int i = 0; i < N; ++i) { const double x = src[(size_t) ((pos - N + i) & (N - 1))].load(); const double s = x + c * s1 - s2; s2 = s1; s1 = s; }
+        return std::sqrt (s1 * s1 + s2 * s2 - c * s1 * s2) / (N / 2.0);
+    };
+    const double a1k = goertzel (bus.scopePost, 1000.0), a5k = goertzel (bus.scopePost, 5000.0);
+    CHECK (a1k > 0.1 && a1k > a5k * 20.0, "the feed carries the 1 kHz tone (" << a1k << " vs " << a5k << " at 5 kHz)");
+}
+
 static void testEditor()
 {
     std::cout << "[editor snapshot]\n";
@@ -1002,6 +1026,7 @@ int main (int argc, char** argv)
     testLimiterAndLoudness();
     testEqDynamicsPro();
     testSpaceColorStereo();
+    testScopeFeed();
     testEditor();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";

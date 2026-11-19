@@ -248,6 +248,10 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     auto& sharedBus = SharedBus::get();
     {
+        const int64_t t = juce::Time::currentTimeMillis();
+        scopeWriter = sharedBus.activeInstance.load() == instanceId || t - sharedBus.lastActiveMs.load() > 400;
+    }
+    {
         const int gen = sharedBus.requestGen.load();
         if (gen != handledGen) { handledGen = gen; analyzer.reset(); analyzing = sharedBus.listenState.load() == SharedBus::listening; }
         if (analyzing && sharedBus.listenState.load() != SharedBus::listening) analyzing = false;   // cancelled / finished elsewhere
@@ -309,6 +313,19 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             grMin = std::min (grMin, compressor.grDb);
             x = drive.process (x);
             v[i] = x;
+        }
+
+        // spectrum analyzer feed (only the instance that is currently the active one writes, so several instances do not interleave)
+        if (scopeWriter)
+        {
+            int sp = sharedBus.scopePos.load (std::memory_order_relaxed);
+            for (int i = 0; i < n; ++i)
+            {
+                const int k = (sp + i) & (SharedBus::kScope - 1);
+                sharedBus.scopePre[(size_t) k].store (monoTuned[(size_t) i], std::memory_order_relaxed);
+                sharedBus.scopePost[(size_t) k].store (v[i], std::memory_order_relaxed);
+            }
+            sharedBus.scopePos.store (sp + n, std::memory_order_release);
         }
 
         // ---- time effects ----

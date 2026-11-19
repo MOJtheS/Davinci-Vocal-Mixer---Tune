@@ -103,22 +103,172 @@ void ControlPage::resized()
 }
 
 // ------------------------------------------------------------ EQ curve
-EqCurveDisplay::EqCurveDisplay (HumRigProcessor& p) : proc (p) { startTimerHz (15); }
+namespace
+{
+constexpr double kMinHz = 20.0, kMaxHz = 20000.0;
+const char* const kNodeNames[5] = { "LOW CUT", "MUD", "BOX", "PRESENCE", "AIR" };
+}
+
+EqCurveDisplay::EqCurveDisplay (HumRigProcessor& p)
+    : proc (p), work ((size_t) SharedBus::kScope * 2, 0.f), specPre ((size_t) SharedBus::kScope / 2, -100.f), specPost ((size_t) SharedBus::kScope / 2, -100.f)
+{
+    startTimerHz (24);
+}
+
+void EqCurveDisplay::updateSpectrum()
+{
+    auto& b = HumRigProcessor::bus();
+    const int pos = b.scopePos.load (std::memory_order_acquire);
+    const int N = SharedBus::kScope;
+    auto run = [&] (const std::array<std::atomic<float>, SharedBus::kScope>& src, std::vector<float>& spec)
+    {
+        for (int i = 0; i < N; ++i)
+        {
+            const float w = 0.5f - 0.5f * std::cos (2.f * 3.14159265f * (float) i / (float) (N - 1));
+            work[(size_t) i] = src[(size_t) ((pos - N + i) & (N - 1))].load (std::memory_order_relaxed) * w;
+        }
+        std::fill (work.begin() + N, work.end(), 0.f);
+        fft.performFrequencyOnlyForwardTransform (work.data());
+        for (int k = 0; k < N / 2; ++k)
+        {
+            const float db = 20.f * std::log10 (std::max (work[(size_t) k] / ((float) N * 0.25f), 1.0e-6f));
+            float& s = spec[(size_t) k];
+            s = db > s ? s + (db - s) * 0.6f : s + (db - s) * 0.12f;          // fast attack, slow release
+        }
+    };
+    run (b.scopePre, specPre);
+    run (b.scopePost, specPost);
+}
+
 void EqCurveDisplay::timerCallback()
 {
-    const auto v = proc.currentEqValues();
-    if (first || std::memcmp (&v, &shown, sizeof (EqValues)) != 0) { shown = v; first = false; repaint(); }
+    shown = proc.currentEqValues();
+    first = false;
+    updateSpectrum();
+    repaint();
 }
+
+juce::Point<float> EqCurveDisplay::nodePos (int idx) const
+{
+    const auto plot = plotArea();
+    const bool man = shown.manual;
+    double f = 1000.0, db = 0.0;
+    switch (idx)
+    {
+        case 0: f = man ? shown.hpfFreq : (shown.female ? 110.0 : 75.0); break;
+        case 1: f = shown.mudFreq; db = shown.mudGain; break;
+        case 2: f = shown.boxFreq; db = shown.boxGain; break;
+        case 3: f = man ? shown.presFreq : (shown.female ? 3800.0 : 3000.0); db = (shown.presence - 50.0) / 50.0 * 5.0; break;
+        default: f = man ? shown.airFreq : (shown.female ? 11000.0 : 10000.0); db = (shown.air - 50.0) / 50.0 * 6.0; break;
+    }
+    const float x = plot.getX() + (float) (std::log (f / kMinHz) / std::log (kMaxHz / kMinHz)) * plot.getWidth();
+    const float y = plot.getCentreY() - (float) (std::clamp (db, -12.0, 12.0) / 12.0) * plot.getHeight() * 0.5f;
+    return { x, y };
+}
+
+int EqCurveDisplay::hitTest (juce::Point<float> p) const
+{
+    int best = -1; float bd = 14.f;
+    for (int i = 0; i < 5; ++i) { const float d = nodePos (i).getDistanceFrom (p); if (d < bd) { bd = d; best = i; } }
+    return best;
+}
+
+void EqCurveDisplay::setPlain (const char* id, float value)
+{
+    if (auto* prm = proc.apvts.getParameter (id)) prm->setValueNotifyingHost (prm->convertTo0to1 (value));
+}
+
+// switching to manual frequencies must not make the sound jump: copy what is currently in effect into the parameters first
+void EqCurveDisplay::ensureManual()
+{
+    if (proc.apvts.getRawParameterValue (ID::eqManual)->load() > 0.5f) return;
+    const bool f = shown.female;
+    setPlain (ID::eqHpfFreq, f ? 110.f : 75.f); setPlain (ID::eqLowFreq, f ? 240.f : 180.f);
+    setPlain (ID::eqPresFreq, f ? 3800.f : 3000.f); setPlain (ID::eqPresQ, 0.9f); setPlain (ID::eqAirFreq, f ? 11000.f : 10000.f);
+    setPlain (ID::eqManual, 1.f);
+}
+
+void EqCurveDisplay::mouseMove (const juce::MouseEvent& e)
+{
+    const int h = hitTest (e.position);
+    if (h != hover) { hover = h; setMouseCursor (h >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor); repaint(); }
+}
+
+void EqCurveDisplay::mouseDown (const juce::MouseEvent& e)
+{
+    dragging = hitTest (e.position);
+    if (dragging < 0) return;
+    if (dragging == 0 || dragging >= 3) ensureManual();
+    static const char* const ids[5][2] = { { ID::eqHpfFreq, nullptr }, { ID::eqMudFreq, ID::eqMudGain }, { ID::eqBoxFreq, ID::eqBoxGain },
+                                           { ID::eqPresFreq, ID::presence }, { ID::eqAirFreq, ID::air } };
+    for (auto* id : ids[dragging]) if (id != nullptr) if (auto* prm = proc.apvts.getParameter (id)) prm->beginChangeGesture();
+}
+
+void EqCurveDisplay::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging < 0) return;
+    const auto plot = plotArea();
+    const double fx = std::clamp ((double) ((e.position.x - plot.getX()) / plot.getWidth()), 0.0, 1.0);
+    const float f = (float) (kMinHz * std::pow (kMaxHz / kMinHz, fx));
+    const float db = std::clamp ((plot.getCentreY() - e.position.y) / (plot.getHeight() * 0.5f) * 12.f, -12.f, 12.f);
+    auto clampTo = [this] (const char* id, float v) { const auto r = proc.apvts.getParameterRange (id); return std::clamp (v, r.start, r.end); };
+    switch (dragging)
+    {
+        case 0: setPlain (ID::eqHpfFreq, clampTo (ID::eqHpfFreq, f)); break;
+        case 1: setPlain (ID::eqMudFreq, clampTo (ID::eqMudFreq, f)); setPlain (ID::eqMudGain, clampTo (ID::eqMudGain, db)); break;
+        case 2: setPlain (ID::eqBoxFreq, clampTo (ID::eqBoxFreq, f)); setPlain (ID::eqBoxGain, clampTo (ID::eqBoxGain, db)); break;
+        case 3: setPlain (ID::eqPresFreq, clampTo (ID::eqPresFreq, f)); setPlain (ID::presence, std::clamp (50.f + db / 5.f * 50.f, 0.f, 100.f)); break;
+        default: setPlain (ID::eqAirFreq, clampTo (ID::eqAirFreq, f)); setPlain (ID::air, std::clamp (50.f + db / 6.f * 50.f, 0.f, 100.f)); break;
+    }
+}
+
+void EqCurveDisplay::mouseUp (const juce::MouseEvent&)
+{
+    if (dragging >= 0)
+    {
+        static const char* const ids[5][2] = { { ID::eqHpfFreq, nullptr }, { ID::eqMudFreq, ID::eqMudGain }, { ID::eqBoxFreq, ID::eqBoxGain },
+                                               { ID::eqPresFreq, ID::presence }, { ID::eqAirFreq, ID::air } };
+        for (auto* id : ids[dragging]) if (id != nullptr) if (auto* prm = proc.apvts.getParameter (id)) prm->endChangeGesture();
+    }
+    dragging = -1;
+}
+
 void EqCurveDisplay::paint (Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
     g.setColour (dark); g.fillRoundedRectangle (b, 14.f);
-    auto plot = b.reduced (34.f, 16.f);
+    auto plot = plotArea();
     const double sr = std::max (8000.0, proc.sampleRate());
     EqBands bands; bands.design (sr, shown);
 
-    auto xOf = [&] (double f) { return plot.getX() + (float) (std::log (f / 20.0) / std::log (1000.0)) * plot.getWidth(); };
+    auto xOf = [&] (double f) { return plot.getX() + (float) (std::log (f / kMinHz) / std::log (kMaxHz / kMinHz)) * plot.getWidth(); };
     auto yOf = [&] (double db) { return plot.getCentreY() - (float) (db / 12.0) * plot.getHeight() * 0.5f; };
+
+    // live spectrum behind the grid: before the EQ (grey) and after (colour), -100 .. -20 dB over the plot height
+    auto drawSpectrum = [&] (const std::vector<float>& spec, Colour fillA, Colour fillB, bool outline)
+    {
+        juce::Path path;
+        const float binHz = (float) sr / (float) SharedBus::kScope;
+        const int cols = (int) plot.getWidth();
+        for (int i = 0; i <= cols; ++i)
+        {
+            const double f = kMinHz * std::pow (kMaxHz / kMinHz, (double) i / cols);
+            const float bin = std::clamp ((float) f / binHz, 1.f, (float) (SharedBus::kScope / 2 - 2));
+            const int k0 = (int) bin; const float fr = bin - (float) k0;
+            const float db = spec[(size_t) k0] * (1.f - fr) + spec[(size_t) (k0 + 1)] * fr;
+            const float v = std::clamp ((db + 100.f) / 80.f, 0.f, 1.f);
+            const float x = plot.getX() + (float) i, y = plot.getBottom() - v * plot.getHeight();
+            if (i == 0) { path.startNewSubPath (x, plot.getBottom()); path.lineTo (x, y); } else path.lineTo (x, y);
+        }
+        path.lineTo (plot.getRight(), plot.getBottom()); path.closeSubPath();
+        g.setGradientFill (juce::ColourGradient (fillA, 0.f, plot.getY(), fillB, 0.f, plot.getBottom(), false));
+        g.fillPath (path);
+        if (outline) { g.setColour (fillA.withAlpha (0.9f)); g.strokePath (path, juce::PathStrokeType (1.2f)); }
+    };
+    g.saveState(); g.reduceClipRegion (plot.toNearestInt());
+    drawSpectrum (specPre, Colour (0x30c9cde8), Colour (0x08c9cde8), false);
+    drawSpectrum (specPost, Colour (0x55b78cff), Colour (0x10ec4899), true);
+    g.restoreState();
 
     g.setFont (fontOf (10.f)); g.setColour (Colour (0xff3a3d55));
     for (double db : { -12.0, -6.0, 0.0, 6.0, 12.0 })
@@ -136,39 +286,30 @@ void EqCurveDisplay::paint (Graphics& g)
         g.setColour (Colour (0xff3a3d55));
     }
 
-    juce::Path curve, fill;
+    juce::Path curve;
     const int steps = (int) plot.getWidth();
     for (int i = 0; i <= steps; ++i)
     {
-        const double f = 20.0 * std::pow (1000.0, (double) i / steps);
+        const double f = kMinHz * std::pow (kMaxHz / kMinHz, (double) i / steps);
         const float y = std::clamp (yOf (bands.magnitudeDb (f, sr)), plot.getY(), plot.getBottom());
         const float x = plot.getX() + (float) i;
-        if (i == 0) { curve.startNewSubPath (x, y); fill.startNewSubPath (x, yOf (0.0)); fill.lineTo (x, y); }
-        else { curve.lineTo (x, y); fill.lineTo (x, y); }
+        if (i == 0) curve.startNewSubPath (x, y); else curve.lineTo (x, y);
     }
-    fill.lineTo (plot.getRight(), yOf (0.0)); fill.closeSubPath();
-    g.setGradientFill (juce::ColourGradient (accentA.withAlpha (0.35f), 0.f, plot.getY(), accentB.withAlpha (0.10f), 0.f, plot.getBottom(), false));
-    g.fillPath (fill);
     g.setColour (Colour (0xfff2f3ff));
-    g.strokePath (curve, juce::PathStrokeType (2.f));
+    g.strokePath (curve, juce::PathStrokeType (2.2f));
 
-    // band handles
-    struct Node { double f; double db; const char* name; bool on; };
-    const bool man = shown.manual;
-    const Node nodes[] = {
-        { man ? shown.hpfFreq : (shown.female ? 110.0 : 75.0), 0.0, "LOW CUT", true },
-        { shown.mudFreq, shown.mudGain, "MUD", std::fabs (shown.mudGain) > 0.01f },
-        { shown.boxFreq, shown.boxGain, "BOX", std::fabs (shown.boxGain) > 0.01f },
-        { man ? shown.presFreq : (shown.female ? 3800.0 : 3000.0), (shown.presence - 50.0) / 50.0 * 5.0, "PRESENCE", true },
-        { man ? shown.airFreq : (shown.female ? 11000.0 : 10000.0), (shown.air - 50.0) / 50.0 * 6.0, "AIR", true } };
+    // handles
     g.setFont (fontOf (9.5f, true));
-    for (const auto& n : nodes)
+    for (int i = 0; i < 5; ++i)
     {
-        if (! n.on) continue;
-        const float x = xOf (n.f), y = std::clamp (yOf (n.db), plot.getY(), plot.getBottom());
-        g.setColour (accentB); g.fillEllipse (x - 5.f, y - 5.f, 10.f, 10.f);
-        g.setColour (juce::Colours::white); g.drawEllipse (x - 5.f, y - 5.f, 10.f, 10.f, 1.5f);
-        g.setColour (Colour (0xffc9cde8)); g.drawText (n.name, (int) x - 30, (int) y - 22, 60, 12, juce::Justification::centred);
+        const bool active = i == 0 || i >= 3 || std::fabs (i == 1 ? shown.mudGain : shown.boxGain) > 0.01f;
+        const auto c = nodePos (i);
+        const bool hot = i == hover || i == dragging;
+        g.setColour (active ? accentB : accentB.withAlpha (0.45f));
+        g.fillEllipse (c.x - (hot ? 7.f : 5.f), c.y - (hot ? 7.f : 5.f), hot ? 14.f : 10.f, hot ? 14.f : 10.f);
+        g.setColour (juce::Colours::white.withAlpha (active ? 1.f : 0.6f)); g.drawEllipse (c.x - 5.f, c.y - 5.f, 10.f, 10.f, 1.5f);
+        g.setColour (Colour (0xffc9cde8).withAlpha (active || hot ? 1.f : 0.55f));
+        g.drawText (kNodeNames[i], (int) c.x - 30, (int) c.y - 22, 60, 12, juce::Justification::centred);
     }
 }
 
@@ -314,12 +455,12 @@ std::vector<std::pair<juce::String, std::unique_ptr<juce::Component>>> createPag
 
     add ("Clean", std::make_unique<ControlPage> (p, std::vector<PageGroup> {
         { "INPUT", { knob (ID::inGain, "Input trim") }, 0.8f },
-        { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual freqs") }, 1.f },
+        { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual") }, 1.f },
         { "NOISE BETWEEN PHRASES (EXPANDER)", { knob (ID::expThr, "Threshold"), knob (ID::expRange, "Reduction"), knob (ID::expHold, "Hold"), knob (ID::expRel, "Release"), tog (ID::expOn, "Expander on") }, 2.4f } },
         nullptr, 0, "Tip: a gentle expander (about 10 dB) turns room noise down between words without cutting the voice. Switch it on, then raise the threshold until the noise just disappears in the gaps."));
 
     add ("EQ", std::make_unique<ControlPage> (p, std::vector<PageGroup> {
-        { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual freqs") }, 1.f },
+        { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual") }, 1.f },
         { "MUD", { knob (ID::eqMudFreq, "Freq"), knob (ID::eqMudGain, "Gain"), knob (ID::eqMudQ, "Q") }, 1.f },
         { "BOX", { knob (ID::eqBoxFreq, "Freq"), knob (ID::eqBoxGain, "Gain"), knob (ID::eqBoxQ, "Q") }, 1.f },
         { "WARMTH", { knob (ID::eqLowFreq, "Freq"), knob (ID::warmth, "Warmth") }, 1.f },

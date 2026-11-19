@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <atomic>
 #include <cstdint>
 
@@ -29,6 +30,11 @@ struct SharedBus
     std::atomic<float>   outPeakDb { -100.f };       // sample peak of the final output since the last reset
     std::atomic<float>   limiterGrDb { 0.f };
     std::atomic<int>     lufsResetGen { 0 };          // bumped by the UI to restart integrated loudness / peak
+
+    // ---- spectrum analyzer feed: the last kScope samples before / after the tone-shaping section (mono) ----
+    static constexpr int kScope = 4096;
+    std::array<std::atomic<float>, kScope> scopePre {}, scopePost {};
+    std::atomic<int>     scopePos { 0 };                // total samples written (index = pos & (kScope-1))
 
     // ---- "Listening" ----
     enum ListenState { idle = 0, listening = 1, done = 2, writing = 3 };
