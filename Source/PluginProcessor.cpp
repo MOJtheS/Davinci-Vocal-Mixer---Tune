@@ -1,3 +1,4 @@
+#include <cstring>
 #include "PluginProcessor.h"
 #include "Editor/PluginEditor.h"
 
@@ -124,36 +125,31 @@ void HumRigProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outGainSm.reset (sr, 0.02); outGainSm.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (p.outGain->load()));
     mixSm.reset (sr, 0.02);     mixSm.setCurrentAndTargetValue (p.mix->load() / 100.f);
 
-    for (auto* f : { &hpf, &hpf2, &mudBq, &boxBq, &lowShelf, &peak, &highShelf, &lpf }) f->reset();
-    lastEq.fill (-12345.f);
+    eq.reset();
+    eqDesigned = false;
     updateEq();
+}
+
+EqValues HumRigProcessor::currentEqValues() const
+{
+    EqValues v;
+    v.female = p.voice->load() > 0.5f; v.manual = q.eqManual->load() > 0.5f;
+    v.warmth = p.warmth->load(); v.presence = p.presence->load(); v.air = p.air->load();
+    v.hpfFreq = q.eqHpfFreq->load(); v.hpf24 = q.eqHpfSlope->load() > 0.5f; v.lowFreq = q.eqLowFreq->load();
+    v.mudFreq = q.eqMudFreq->load(); v.mudGain = q.eqMudGain->load(); v.mudQ = q.eqMudQ->load();
+    v.boxFreq = q.eqBoxFreq->load(); v.boxGain = q.eqBoxGain->load(); v.boxQ = q.eqBoxQ->load();
+    v.presFreq = q.eqPresFreq->load(); v.presQ = q.eqPresQ->load(); v.airFreq = q.eqAirFreq->load();
+    v.lpfOn = q.eqLpfOn->load() > 0.5f; v.lpfFreq = q.eqLpfFreq->load();
+    return v;
 }
 
 void HumRigProcessor::updateEq()
 {
-    const float voiceV = p.voice->load(), w = p.warmth->load(), pr = p.presence->load(), a = p.air->load();
-    const bool manual = q.eqManual->load() > 0.5f;
-    const std::array<float, 24> now {
-        voiceV, w, pr, a, manual ? 1.f : 0.f, q.eqHpfFreq->load(), q.eqHpfSlope->load(), q.eqLowFreq->load(),
-        q.eqMudFreq->load(), q.eqMudGain->load(), q.eqMudQ->load(), q.eqBoxFreq->load(), q.eqBoxGain->load(), q.eqBoxQ->load(),
-        q.eqPresFreq->load(), q.eqPresQ->load(), q.eqAirFreq->load(), q.eqLpfOn->load(), q.eqLpfFreq->load(), 0.f, 0.f, 0.f, 0.f, 0.f };
-    if (now == lastEq) return;
-    lastEq = now;
-    const bool female = voiceV > 0.5f;
-    const double hpfHz  = manual ? (double) now[5]  : (female ? 110.0 : 75.0);
-    const double lowHz  = manual ? (double) now[7]  : (female ? 240.0 : 180.0);
-    const double presHz = manual ? (double) now[14] : (female ? 3800.0 : 3000.0);
-    const double presQ  = manual ? (double) now[15] : 0.9;
-    const double airHz  = manual ? (double) now[16] : (female ? 11000.0 : 10000.0);
-    hpf.makeHighPass (sr, hpfHz, 0.707);
-    hpf2.makeHighPass (sr, hpfHz, 0.707);
-    hpf24 = manual && now[6] > 0.5f;
-    mudOn = std::fabs (now[9]) > 0.01f;   if (mudOn) mudBq.makePeak (sr, now[8], now[10], now[9]);
-    boxOn = std::fabs (now[12]) > 0.01f;  if (boxOn) boxBq.makePeak (sr, now[11], now[13], now[12]);
-    lowShelf.makeLowShelf (sr, lowHz, (w - 50.0) / 50.0 * 6.0);
-    peak.makePeak (sr, presHz, presQ, (pr - 50.0) / 50.0 * 5.0);
-    highShelf.makeHighShelf (sr, airHz, (a - 50.0) / 50.0 * 6.0);
-    lpfOn = now[17] > 0.5f;               if (lpfOn) lpf.makeLowPass (sr, now[18], 0.707);
+    const auto v = currentEqValues();
+    auto same = [] (const EqValues& a, const EqValues& b) { return std::memcmp (&a, &b, sizeof (EqValues)) == 0; };
+    if (eqDesigned && same (v, lastEqValues)) return;
+    lastEqValues = v; eqDesigned = true;
+    eq.design (sr, v);
 }
 
 void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -307,14 +303,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         for (int i = 0; i < n; ++i)
         {
             float x = monoTuned[(size_t) i];
-            x = hpf.process (x);
-            if (hpf24) x = hpf2.process (x);
-            if (mudOn) x = mudBq.process (x);
-            if (boxOn) x = boxBq.process (x);
-            x = lowShelf.process (x);
-            x = peak.process (x);
-            x = highShelf.process (x);
-            if (lpfOn) x = lpf.process (x);
+            x = eq.process (x);
             x = deesser.process (x);
             x = compressor.process (x);
             grMin = std::min (grMin, compressor.grDb);
@@ -385,7 +374,8 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     if (sawBad)      // something went non-finite: flush all recursive state so it cannot persist
     {
-        for (auto* f : { &hpf, &hpf2, &mudBq, &boxBq, &lowShelf, &peak, &highShelf, &lpf, &revHpL, &revHpR, &revLpL, &revLpR }) f->reset();
+        eq.reset();
+        for (auto* f : { &revHpL, &revHpR, &revLpL, &revLpR }) f->reset();
         compressor.reset(); deesser.reset(); drive.reset(); expander.reset(); delay.reset(); preDelay.reset(); ducker.reset(); doubler.reset();
         limiter.reset(); reverb.reset(); corrector.reset();
     }
@@ -493,6 +483,7 @@ void HumRigProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
     state.setProperty ("preset", currentPreset, nullptr);
+    state.setProperty ("uiPage", uiPage.load(), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 
@@ -503,6 +494,7 @@ void HumRigProcessor::setStateInformation (const void* data, int size)
         {
             auto vt = juce::ValueTree::fromXml (*xml);
             currentPreset = juce::jlimit (0, getNumPresets() - 1, (int) vt.getProperty ("preset", 0));
+            uiPage = juce::jlimit (0, 8, (int) vt.getProperty ("uiPage", 0));
             apvts.replaceState (vt);
         }
 }

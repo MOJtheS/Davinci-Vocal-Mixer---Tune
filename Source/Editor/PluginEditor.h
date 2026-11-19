@@ -16,6 +16,9 @@ namespace colours
     inline const juce::Colour dark      { 0xff1d1e2b };
 }
 
+void drawCardAt (juce::Graphics&, juce::Rectangle<int>, const juce::String& title);   // light rounded card used on every page
+class PageNav;
+
 class HumRigLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
@@ -119,7 +122,8 @@ public:
     static constexpr int kWidth = 900, kHeight = 600;
 
 private:
-    void drawCard (juce::Graphics&, juce::Rectangle<int>, const juce::String& title);
+    void drawCard (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title) { drawCardAt (g, r, title); }
+    void setPage (int);
 
     HumRigProcessor& proc;
     HumRigLookAndFeel laf;
@@ -146,7 +150,12 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyAtt, scaleAtt;   // created after the boxes are populated
     juce::AudioProcessorValueTreeState::ButtonAttachment tuneAtt, pingAtt;
 
-    juce::Rectangle<int> cardMix, cardPitch, cardReverb, cardDelay, cardOut;
+    juce::Rectangle<int> cardMix, cardPitch, cardReverb, cardDelay, cardOut, bodyArea;
+
+    std::vector<juce::Component*> homeWidgets;      // the v0.2 single-page UI is now the "Home" tab
+    std::unique_ptr<PageNav> nav;
+    std::vector<std::unique_ptr<juce::Component>> pages;
+    int page = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HumRigEditor)
 };

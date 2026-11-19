@@ -7,6 +7,7 @@
 #include "DSP/Biquad.h"
 #include "DSP/Dynamics.h"
 #include "DSP/Effects.h"
+#include "DSP/EqDesign.h"
 #include "DSP/Limiter.h"
 #include "DSP/Loudness.h"
 #include "DSP/PitchCorrector.h"
@@ -78,13 +79,18 @@ private:
     } q {};
 
     void updateEq();
+public:
+    humrig::EqValues currentEqValues() const;   // what the tone section is set to right now (for the EQ curve display)
+    double sampleRate() const { return sr; }
+    std::atomic<int> uiPage { 0 };              // last selected editor tab (saved with the project)
+private:
     static float mixDbToLin (float db) { return db <= humrig::kMixOffDb + 0.05f ? 0.f : juce::Decibels::decibelsToGain (db); }
 
     double sr = 44100.0;
     int maxBlock = 512;
 
     humrig::PitchCorrector corrector;
-    humrig::Biquad hpf, hpf2, mudBq, boxBq, lowShelf, peak, highShelf, lpf;
+    humrig::EqBands eq;
     humrig::Biquad revHpL, revHpR, revLpL, revLpR;
     humrig::Expander expander;
     humrig::Compressor compressor;
@@ -98,9 +104,9 @@ private:
     humrig::LoudnessMeter loudness;
     juce::Reverb reverb;
     int handledLufsGen = 0;
-    bool hpf24 = false, mudOn = false, boxOn = false, lpfOn = false;
     float lastRevLo = -1.f, lastRevHi = -1.f;
-    std::array<float, 24> lastEq {};
+    humrig::EqValues lastEqValues;
+    bool eqDesigned = false;
 
     std::array<std::vector<float>, 2> dryRing;   // latency-aligned dry for the Dry/Wet control
     int dryPos = 0;

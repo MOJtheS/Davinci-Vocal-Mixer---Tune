@@ -76,7 +76,7 @@ APVTS::ParameterLayout createParameterLayout()
     // eq
     l.add (std::make_unique<B> (PID (ID::eqManual, v2), "EQ Manual Frequencies", false));
     l.add (std::make_unique<P> (PID (ID::eqHpfFreq, v2), "HPF Frequency", logRange (40, 200), 110.f, hzLab));
-    l.add (std::make_unique<C> (PID (ID::eqHpfSlope, v2), "HPF Slope", juce::StringArray { "12 dB/oct", "24 dB/oct" }, 0));
+    l.add (std::make_unique<C> (PID (ID::eqHpfSlope, v2), "HPF Slope", juce::StringArray { "12 dB", "24 dB" }, 0));
     l.add (std::make_unique<P> (PID (ID::eqLowFreq, v2), "Low Shelf Frequency", logRange (80, 400), 240.f, hzLab));
     l.add (std::make_unique<P> (PID (ID::eqMudFreq, v2), "Mud Frequency", logRange (150, 500), 300.f, hzLab));
     l.add (std::make_unique<P> (PID (ID::eqMudGain, v2), "Mud Gain", fullRange (-9, 3), 0.f, dbLab));

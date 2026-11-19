@@ -643,6 +643,10 @@ static std::vector<std::vector<float>> renderGolden()
 static void testGolden (int extraLatency)
 {
     std::cout << "[golden regression vs v0.2]\n";
+   #if ! JUCE_LINUX
+    std::cout << "  (golden file was recorded on Linux; the pitch engine's FFT differs slightly per platform, so this check runs on Linux only)\n";
+    (void) extraLatency; return;
+   #endif
     auto cur = renderGolden();
     const char* wr = std::getenv ("HUMRIG_WRITE_GOLDEN");
     if (wr != nullptr)
@@ -910,15 +914,28 @@ static void testEditor()
     std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
     CHECK (ed != nullptr, "editor created");
     if (ed == nullptr) return;
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (100);    // let ParameterAttachments deliver their initial values
-    auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
     outDir.createDirectory();
+    juce::PNGImageFormat png;
+    // feed some audio so the meters/curves have something to show
+    auto sig = makeHum (48000.0, 1.0, [] (double t) { return 200.0 + 40.0 * t; }, -50.f, 5);
+    runProcessor (p, sig, 48000.0, 480, 1, 2);
+    const char* names[] = { "home", "clean", "eq", "compress", "deess", "color", "space", "stereo", "master" };
+    for (int page = 0; page < 9; ++page)
+    {
+        p.uiPage = page;
+        std::unique_ptr<juce::AudioProcessorEditor> e2 (p.createEditor());
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (120);    // let ParameterAttachments deliver their initial values
+        auto img = e2->createComponentSnapshot (e2->getLocalBounds(), true, 1.5f);
+        auto f = outDir.getChildFile (juce::String ("editor-") + names[page] + ".png");
+        f.deleteFile();
+        if (auto os = std::unique_ptr<juce::FileOutputStream> (f.createOutputStream())) png.writeImageToStream (img, *os);
+        CHECK (f.getSize() > 1000, "wrote " << f.getFullPathName());
+    }
+    p.uiPage = 0;
+    auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
     auto f = outDir.getChildFile ("editor.png");
     f.deleteFile();
-    juce::PNGImageFormat png;
-    if (auto os = std::unique_ptr<juce::FileOutputStream> (f.createOutputStream()))
-        png.writeImageToStream (img, *os);
-    CHECK (f.getSize() > 1000, "wrote " << f.getFullPathName());
+    if (auto os = std::unique_ptr<juce::FileOutputStream> (f.createOutputStream())) png.writeImageToStream (img, *os);
 }
 
 int main (int argc, char** argv)

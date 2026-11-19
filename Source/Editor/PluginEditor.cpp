@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "Pages.h"
 #include "../DSP/Scale.h"
 
 namespace humrig
@@ -356,11 +357,34 @@ HumRigEditor::HumRigEditor (HumRigProcessor& p)
              &revMix, &revSize, &revDecay, &dlyMix, &dlyFb, &inGain, &outGain, &mixKnob,
              &tuneOn, &ping, &keyBox, &scaleBox, &rangeSeg, &dlyTimeSeg })
         addAndMakeVisible (c);
+
+    // everything in the v0.2 body becomes the "Home" tab (header widgets stay visible on every tab)
+    homeWidgets = { &grMeter, &pitchOut, &inBar, &outBar, &warmth, &presence, &air, &comp, &deess, &drive, &speed, &vibrato, &flex,
+                    &revMix, &revSize, &revDecay, &dlyMix, &dlyFb, &inGain, &outGain, &mixKnob, &tuneOn, &ping, &keyBox, &scaleBox, &rangeSeg, &dlyTimeSeg };
+
+    juce::StringArray names { "Home" };
+    auto made = createPages (p);
+    for (auto& pr : made) { names.add (pr.first); addChildComponent (*pr.second); pages.push_back (std::move (pr.second)); }
+    nav = std::make_unique<PageNav> (names);
+    nav->onSelect = [this] (int i) { setPage (i); };
+    addAndMakeVisible (*nav);
+    setPage (juce::jlimit (0, (int) pages.size(), proc.uiPage.load()));
+    resized();
 }
 
 HumRigEditor::~HumRigEditor() { setLookAndFeel (nullptr); }
 
-void HumRigEditor::drawCard (Graphics& g, Rectangle<int> r, const juce::String& title)
+void HumRigEditor::setPage (int i)
+{
+    page = juce::jlimit (0, (int) pages.size(), i);
+    proc.uiPage = page;
+    for (auto* c : homeWidgets) c->setVisible (page == 0);
+    for (size_t k = 0; k < pages.size(); ++k) pages[k]->setVisible ((int) k + 1 == page);
+    if (nav != nullptr) nav->setCurrent (page);
+    repaint();
+}
+
+void drawCardAt (Graphics& g, Rectangle<int> r, const juce::String& title)
 {
     auto f = r.toFloat();
     g.setColour (juce::Colour (0x14505a8c)); g.fillRoundedRectangle (f.translated (0.f, 3.f), 16.f);
@@ -369,7 +393,7 @@ void HumRigEditor::drawCard (Graphics& g, Rectangle<int> r, const juce::String& 
     if (title.isNotEmpty())
     {
         g.setColour (inkSoft); g.setFont (fontOf (11.f, true));
-        g.drawText (title, r.getX() + 16, r.getY() + 10, 200, 16, juce::Justification::centredLeft);
+        g.drawText (title, r.getX() + 16, r.getY() + 10, r.getWidth() - 24, 16, juce::Justification::centredLeft);
     }
 }
 
@@ -381,11 +405,9 @@ void HumRigEditor::paint (Graphics& g)
     g.setColour (inkSoft); g.setFont (fontOf (10.5f));
     g.drawText ("vocal tune & mix for Fairlight", 26, 44, 220, 14, juce::Justification::centredLeft);
 
+    if (page != 0) return;
     drawCard (g, cardMix, {});
     drawCard (g, cardPitch, "PITCH CORRECTION");
-    g.setColour (inkSoft); g.setFont (fontOf (10.5f));
-    g.drawFittedText ("Speed 100 = hard tune, lower = more natural. Flex lets small natural pitch movement through. Vibrato adds a gentle wobble.",
-                      cardPitch.getX() + 18, cardPitch.getBottom() - 38, cardPitch.getWidth() - 36, 30, juce::Justification::centredLeft, 2);
     drawCard (g, cardReverb, "REVERB");
     drawCard (g, cardDelay, "DELAY");
     drawCard (g, cardOut, "LEVELS");
@@ -394,17 +416,23 @@ void HumRigEditor::paint (Graphics& g)
 void HumRigEditor::resized()
 {
     auto area = getLocalBounds().reduced (20, 0);
-    auto header = area.removeFromTop (70).withTrimmedTop (14);
+    auto header = area.removeFromTop (64).withTrimmedTop (12);
     voiceSeg.setBounds (header.removeFromRight (150).withSizeKeepingCentre (150, 30));
-    listenBtn.setBounds (190, 27, 235, 30);
+    listenBtn.setBounds (190, 24, 235, 30);
     header.removeFromRight (16);
     nextBtn.setBounds (header.removeFromRight (34).withSizeKeepingCentre (34, 30));
     presetBox.setBounds (header.removeFromRight (200).withSizeKeepingCentre (200, 30));
     prevBtn.setBounds (header.removeFromRight (34).withSizeKeepingCentre (34, 30));
 
-    auto top = area.removeFromTop (330);
-    area.removeFromTop (14);
-    auto bottom = area.withTrimmedBottom (20);
+    if (nav != nullptr) nav->setBounds (area.removeFromTop (34)); else area.removeFromTop (34);
+    area.removeFromTop (8);
+    bodyArea = area.withTrimmedBottom (14);
+    for (auto& pg : pages) pg->setBounds (bodyArea);
+
+    auto home = bodyArea;
+    auto top = home.removeFromTop (300);
+    home.removeFromTop (12);
+    auto bottom = home;
 
     // top-left: meter + level bars on the left, 3x2 knob grid on the right
     cardMix = top.removeFromLeft (530);
@@ -414,10 +442,10 @@ void HumRigEditor::resized()
     auto m = cardMix.reduced (16);
     auto left = m.removeFromLeft (190);
     m.removeFromLeft (14);
-    grMeter.setBounds (left.removeFromTop (150));
-    left.removeFromTop (22);
+    grMeter.setBounds (left.removeFromTop (140));
+    left.removeFromTop (18);
     inBar.setBounds (left.removeFromTop (34));
-    left.removeFromTop (14);
+    left.removeFromTop (12);
     outBar.setBounds (left.removeFromTop (34));
 
     const int kw = m.getWidth() / 3, kh = (m.getHeight() - 6) / 2;
@@ -433,13 +461,13 @@ void HumRigEditor::resized()
     keyBox.setBounds (row1.removeFromLeft (84));
     row1.removeFromLeft (8);
     scaleBox.setBounds (row1);
-    pc.removeFromTop (10);
-    pitchOut.setBounds (pc.removeFromTop (64));
-    pc.removeFromTop (6);
-    auto knobs = pc.removeFromTop (116);
+    pc.removeFromTop (8);
+    pitchOut.setBounds (pc.removeFromTop (58));
+    pc.removeFromTop (4);
+    auto knobs = pc.removeFromTop (108);
     const int pw = knobs.getWidth() / 3;
     speed.setBounds (knobs.removeFromLeft (pw)); vibrato.setBounds (knobs.removeFromLeft (pw)); flex.setBounds (knobs);
-    pc.removeFromTop (8);
+    pc.removeFromTop (6);
     rangeSeg.setBounds (pc.removeFromTop (28));
 
     // bottom cards

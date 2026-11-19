@@ -49,7 +49,8 @@ target_sources(HumRig PRIVATE
     Source/PluginProcessor.cpp
     Source/Parameters.cpp
     Source/DSP/PitchCorrector.cpp
-    Source/Editor/PluginEditor.cpp)
+    Source/Editor/PluginEditor.cpp
+    Source/Editor/Pages.cpp)
 
 target_include_directories(HumRig PRIVATE Source)
 target_compile_definitions(HumRig PUBLIC
@@ -76,7 +77,8 @@ if(HUMRIG_BUILD_TESTS)
         Source/PluginProcessor.cpp
         Source/Parameters.cpp
         Source/DSP/PitchCorrector.cpp
-        Source/Editor/PluginEditor.cpp)
+        Source/Editor/PluginEditor.cpp
+    Source/Editor/Pages.cpp)
     target_include_directories(HumRigTests PRIVATE Source)
     target_compile_definitions(HumRigTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
