@@ -17,6 +17,65 @@ HumRigProcessor::HumRigProcessor()
     p.revMix = g (ID::revMix); p.revSize = g (ID::revSize); p.revDecay = g (ID::revDecay);
     p.dlyMix = g (ID::dlyMix); p.dlyFb = g (ID::dlyFb); p.dlyTime = g (ID::dlyTime); p.dlyPing = g (ID::dlyPing);
     p.inGain = g (ID::inGain); p.outGain = g (ID::outGain); p.mix = g (ID::mix);
+    q.limOn = g (ID::limOn);
+    q.limCeil = g (ID::limCeil);
+    q.limRelease = g (ID::limRelease);
+    q.limGain = g (ID::limGain);
+    q.eqManual = g (ID::eqManual);
+    q.eqHpfFreq = g (ID::eqHpfFreq);
+    q.eqHpfSlope = g (ID::eqHpfSlope);
+    q.eqLowFreq = g (ID::eqLowFreq);
+    q.eqMudFreq = g (ID::eqMudFreq);
+    q.eqMudGain = g (ID::eqMudGain);
+    q.eqMudQ = g (ID::eqMudQ);
+    q.eqBoxFreq = g (ID::eqBoxFreq);
+    q.eqBoxGain = g (ID::eqBoxGain);
+    q.eqBoxQ = g (ID::eqBoxQ);
+    q.eqPresFreq = g (ID::eqPresFreq);
+    q.eqPresQ = g (ID::eqPresQ);
+    q.eqAirFreq = g (ID::eqAirFreq);
+    q.eqLpfOn = g (ID::eqLpfOn);
+    q.eqLpfFreq = g (ID::eqLpfFreq);
+    q.compRatio = g (ID::compRatio);
+    q.compAttack = g (ID::compAttack);
+    q.compRelease = g (ID::compRelease);
+    q.compKnee = g (ID::compKnee);
+    q.compMix = g (ID::compMix);
+    q.compDet = g (ID::compDet);
+    q.compSc = g (ID::compSc);
+    q.compThr = g (ID::compThr);
+    q.compMk = g (ID::compMk);
+    q.dsFreq = g (ID::dsFreq);
+    q.dsMode = g (ID::dsMode);
+    q.dsRange = g (ID::dsRange);
+    q.dsThr = g (ID::dsThr);
+    q.dsListen = g (ID::dsListen);
+    q.colType = g (ID::colType);
+    q.colTone = g (ID::colTone);
+    q.colMix = g (ID::colMix);
+    q.excFreq = g (ID::excFreq);
+    q.excAmt = g (ID::excAmt);
+    q.revPre = g (ID::revPre);
+    q.revFilt = g (ID::revFilt);
+    q.revLo = g (ID::revLo);
+    q.revHi = g (ID::revHi);
+    q.duck = g (ID::duck);
+    q.dlyTimeEx = g (ID::dlyTimeEx);
+    q.dlyFree = g (ID::dlyFree);
+    q.dlyFilt = g (ID::dlyFilt);
+    q.dlyHpf = g (ID::dlyHpf);
+    q.dlyLpf = g (ID::dlyLpf);
+    q.dblMix = g (ID::dblMix);
+    q.dblDelay = g (ID::dblDelay);
+    q.dblDetune = g (ID::dblDetune);
+    q.dblHpf = g (ID::dblHpf);
+    q.width = g (ID::width);
+    q.monoCheck = g (ID::monoCheck);
+    q.expOn = g (ID::expOn);
+    q.expThr = g (ID::expThr);
+    q.expRange = g (ID::expRange);
+    q.expHold = g (ID::expHold);
+    q.expRel = g (ID::expRel);
     instanceId = SharedBus::get().nextInstanceId();
     handledGen = SharedBus::get().requestGen.load();
 }
@@ -35,13 +94,23 @@ void HumRigProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     maxBlock = std::max (1, samplesPerBlock);
 
     corrector.prepare (sr, maxBlock);
-    setLatencySamples (corrector.getLatencySamples());
+    limiter.prepare (sr);
+    setLatencySamples (corrector.getLatencySamples() + limiter.lookahead());   // constant: the limiter always delays, whether it is on or off
 
+    expander.prepare (sr);
     compressor.prepare (sr);
     deesser.prepare (sr);
+    drive.prepare (sr);
     delay.prepare (sr);
+    preDelay.prepare (sr);
+    ducker.prepare (sr);
+    doubler.prepare (sr);
+    loudness.prepare (sr);
+    handledLufsGen = SharedBus::get().lufsResetGen.load();
     reverb.setSampleRate (sr);
     reverb.reset();
+    for (auto* f : { &revHpL, &revHpR, &revLpL, &revLpR }) f->reset();
+    lastRevLo = lastRevHi = -1.f;
 
     for (auto& r : dryRing) r.assign ((size_t) std::max (1, corrector.getLatencySamples()), 0.f);
     dryPos = 0;
@@ -55,21 +124,36 @@ void HumRigProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outGainSm.reset (sr, 0.02); outGainSm.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (p.outGain->load()));
     mixSm.reset (sr, 0.02);     mixSm.setCurrentAndTargetValue (p.mix->load() / 100.f);
 
-    hpf.reset(); lowShelf.reset(); peak.reset(); highShelf.reset();
-    lastVoice = lastWarmth = lastPresence = lastAir = -1.f;
+    for (auto* f : { &hpf, &hpf2, &mudBq, &boxBq, &lowShelf, &peak, &highShelf, &lpf }) f->reset();
+    lastEq.fill (-12345.f);
     updateEq();
 }
 
 void HumRigProcessor::updateEq()
 {
     const float voiceV = p.voice->load(), w = p.warmth->load(), pr = p.presence->load(), a = p.air->load();
-    if (voiceV == lastVoice && w == lastWarmth && pr == lastPresence && a == lastAir) return;
-    lastVoice = voiceV; lastWarmth = w; lastPresence = pr; lastAir = a;
+    const bool manual = q.eqManual->load() > 0.5f;
+    const std::array<float, 24> now {
+        voiceV, w, pr, a, manual ? 1.f : 0.f, q.eqHpfFreq->load(), q.eqHpfSlope->load(), q.eqLowFreq->load(),
+        q.eqMudFreq->load(), q.eqMudGain->load(), q.eqMudQ->load(), q.eqBoxFreq->load(), q.eqBoxGain->load(), q.eqBoxQ->load(),
+        q.eqPresFreq->load(), q.eqPresQ->load(), q.eqAirFreq->load(), q.eqLpfOn->load(), q.eqLpfFreq->load(), 0.f, 0.f, 0.f, 0.f, 0.f };
+    if (now == lastEq) return;
+    lastEq = now;
     const bool female = voiceV > 0.5f;
-    hpf.makeHighPass (sr, female ? 110.0 : 75.0, 0.707);
-    lowShelf.makeLowShelf (sr, female ? 240.0 : 180.0, (w - 50.0) / 50.0 * 6.0);
-    peak.makePeak (sr, female ? 3800.0 : 3000.0, 0.9, (pr - 50.0) / 50.0 * 5.0);
-    highShelf.makeHighShelf (sr, female ? 11000.0 : 10000.0, (a - 50.0) / 50.0 * 6.0);
+    const double hpfHz  = manual ? (double) now[5]  : (female ? 110.0 : 75.0);
+    const double lowHz  = manual ? (double) now[7]  : (female ? 240.0 : 180.0);
+    const double presHz = manual ? (double) now[14] : (female ? 3800.0 : 3000.0);
+    const double presQ  = manual ? (double) now[15] : 0.9;
+    const double airHz  = manual ? (double) now[16] : (female ? 11000.0 : 10000.0);
+    hpf.makeHighPass (sr, hpfHz, 0.707);
+    hpf2.makeHighPass (sr, hpfHz, 0.707);
+    hpf24 = manual && now[6] > 0.5f;
+    mudOn = std::fabs (now[9]) > 0.01f;   if (mudOn) mudBq.makePeak (sr, now[8], now[10], now[9]);
+    boxOn = std::fabs (now[12]) > 0.01f;  if (boxOn) boxBq.makePeak (sr, now[11], now[13], now[12]);
+    lowShelf.makeLowShelf (sr, lowHz, (w - 50.0) / 50.0 * 6.0);
+    peak.makePeak (sr, presHz, presQ, (pr - 50.0) / 50.0 * 5.0);
+    highShelf.makeHighShelf (sr, airHz, (a - 50.0) / 50.0 * 6.0);
+    lpfOn = now[17] > 0.5f;               if (lpfOn) lpf.makeLowPass (sr, now[18], 0.707);
 }
 
 void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -98,9 +182,39 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         }
     }
     updateEq();
-    compressor.setAmount (p.comp->load());
-    deesser.setAmount (p.deess->load());
-    drive.setAmount (p.drive->load());
+    {
+        Compressor::Settings cs;
+        cs.amount = p.comp->load(); cs.ratioOverride = q.compRatio->load(); cs.attackMs = q.compAttack->load(); cs.releaseMs = q.compRelease->load();
+        cs.kneeDb = q.compKnee->load(); cs.mix = q.compMix->load() * 0.01f; cs.rms = q.compDet->load() > 0.5f; cs.scHpfHz = q.compSc->load();
+        cs.thresholdTrimDb = q.compThr->load(); cs.makeupTrimDb = q.compMk->load();
+        compressor.set (cs);
+
+        DeEsser::Settings ds;
+        ds.amount = p.deess->load(); ds.freqHz = q.dsFreq->load(); ds.mode = (int) q.dsMode->load(); ds.maxReductionDb = q.dsRange->load();
+        ds.thresholdTrimDb = q.dsThr->load(); ds.listen = q.dsListen->load() > 0.5f;
+        deesser.set (ds);
+
+        Drive::Settings dr;
+        dr.amount = p.drive->load(); dr.type = (int) q.colType->load(); dr.tone = q.colTone->load(); dr.mix = q.colMix->load() * 0.01f;
+        dr.excFreq = q.excFreq->load(); dr.excAmount = q.excAmt->load();
+        drive.set (dr);
+
+        expander.set (q.expOn->load() > 0.5f, q.expThr->load(), q.expRange->load(), q.expHold->load(), q.expRel->load());
+        limiter.setParams (q.limOn->load() > 0.5f, q.limCeil->load(), q.limRelease->load(), q.limGain->load());
+        preDelay.setMs (q.revPre->load());
+        ducker.setAmount (q.duck->load());
+        doubler.set (q.dblDelay->load(), q.dblDetune->load(), q.dblHpf->load());
+    }
+    const float dblGain = q.dblMix->load() * 0.01f;
+    const float widthV = q.width->load() * 0.01f;
+    const bool monoCheckOn = q.monoCheck->load() > 0.5f;
+    const bool revFiltOn = q.revFilt->load() > 0.5f;
+    if (revFiltOn && (q.revLo->load() != lastRevLo || q.revHi->load() != lastRevHi))
+    {
+        lastRevLo = q.revLo->load(); lastRevHi = q.revHi->load();
+        revHpL.makeHighPass (sr, lastRevLo, 0.707); revHpR = revHpL;
+        revLpL.makeLowPass (sr, lastRevHi, 0.707);  revLpR = revLpL;
+    }
 
     inGainSm.setTargetValue (juce::Decibels::decibelsToGain (p.inGain->load()));
     outGainSm.setTargetValue (juce::Decibels::decibelsToGain (p.outGain->load()));
@@ -112,7 +226,13 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         if (auto pos = ph->getPosition())
             if (auto b = pos->getBpm()) if (*b > 20.0 && *b < 400.0) bpm = *b;
     const double beats[3] = { 1.0, 0.5, 0.25 };
-    const double delaySec = beats[juce::jlimit (0, 2, (int) p.dlyTime->load())] * 60.0 / bpm;
+    double delaySec = beats[juce::jlimit (0, 2, (int) p.dlyTime->load())] * 60.0 / bpm;
+    {
+        const int ex = (int) q.dlyTimeEx->load();
+        if (ex == 11) delaySec = (double) q.dlyFree->load() * 0.001;
+        else if (ex >= 1 && ex <= 10) delaySec = kDelayTimeExBeats[ex] * 60.0 / bpm;
+    }
+    delay.setFilters (q.dlyFilt->load() > 0.5f, q.dlyLpf->load(), q.dlyHpf->load());
     delay.set (delaySec, p.dlyFb->load() / 100.f, p.dlyPing->load() > 0.5f, mixDbToLin (p.dlyMix->load()));
 
     {
@@ -127,7 +247,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
     const float revGain = mixDbToLin (p.revMix->load());
 
-    float grMin = 0.f, inPeak = 0.f, outPeak = 0.f;
+    float grMin = 0.f, inPeak = 0.f, outPeak = 0.f, limGrMin = 0.f;
     bool sawBad = false;
 
     auto& sharedBus = SharedBus::get();
@@ -154,6 +274,8 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             if (analyzing) monoRaw[(size_t) i] = raw;
             inPeak = std::max (inPeak, std::fabs (mi[i]));
         }
+
+        for (int i = 0; i < n; ++i) mi[i] = expander.process (mi[i]);
 
         if (analyzing)
         {
@@ -186,9 +308,13 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         {
             float x = monoTuned[(size_t) i];
             x = hpf.process (x);
+            if (hpf24) x = hpf2.process (x);
+            if (mudOn) x = mudBq.process (x);
+            if (boxOn) x = boxBq.process (x);
             x = lowShelf.process (x);
             x = peak.process (x);
             x = highShelf.process (x);
+            if (lpfOn) x = lpf.process (x);
             x = deesser.process (x);
             x = compressor.process (x);
             grMin = std::min (grMin, compressor.grDb);
@@ -201,9 +327,18 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         for (int i = 0; i < n; ++i)
         {
             const float send = (v[i] + 0.5f * (dlyL[(size_t) i] + dlyR[(size_t) i])) * revGain;
-            revL[(size_t) i] = revR[(size_t) i] = send;
+            revL[(size_t) i] = revR[(size_t) i] = preDelay.process (send);
         }
-        if (revGain > 0.f) reverb.processStereo (revL.data(), revR.data(), n);
+        if (revGain > 0.f)
+        {
+            reverb.processStereo (revL.data(), revR.data(), n);
+            if (revFiltOn)
+                for (int i = 0; i < n; ++i)
+                {
+                    revL[(size_t) i] = revLpL.process (revHpL.process (revL[(size_t) i]));
+                    revR[(size_t) i] = revLpR.process (revHpR.process (revR[(size_t) i]));
+                }
+        }
         else { std::fill_n (revL.begin(), n, 0.f); std::fill_n (revR.begin(), n, 0.f); }
 
         // ---- sum, dry/wet, output ----
@@ -211,8 +346,20 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         float* outR = nOut > 1 ? buffer.getWritePointer (1) + start : nullptr;
         for (int i = 0; i < n; ++i)
         {
-            const float wetL = v[i] + dlyL[(size_t) i] + revL[(size_t) i];
-            const float wetR = v[i] + dlyR[(size_t) i] + revR[(size_t) i];
+            const float duck = ducker.process (v[i]);
+            float wetL = v[i] + (dlyL[(size_t) i] + revL[(size_t) i]) * duck;
+            float wetR = v[i] + (dlyR[(size_t) i] + revR[(size_t) i]) * duck;
+            if (dblGain > 0.f)
+            {
+                float dL, dR;
+                doubler.process (v[i], dL, dR);
+                wetL += dblGain * dL; wetR += dblGain * dR;
+            }
+            if (std::fabs (widthV - 1.f) > 0.001f)
+            {
+                const float mid = 0.5f * (wetL + wetR), side = 0.5f * (wetL - wetR) * widthV;
+                wetL = mid + side; wetR = mid - side;
+            }
 
             // latency-aligned dry (original input, stereo preserved)
             const float dL = dryRing[0][(size_t) dryPos], dR = dryRing[1][(size_t) dryPos];
@@ -225,16 +372,22 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             float r = (dR * (1.f - m) + wetR * m) * og;
             if (! (std::isfinite (l) && std::isfinite (r))) { sawBad = true; l = r = 0.f; }   // never emit NaN/Inf to the host
             l = juce::jlimit (-16.f, 16.f, l); r = juce::jlimit (-16.f, 16.f, r);
+            if (outR == nullptr) l = r = 0.5f * (l + r);           // mono output: limit/measure what is actually delivered
+            limiter.process (l, r, l, r);
+            if (monoCheckOn) l = r = 0.5f * (l + r);
+            loudness.push (l, r);
             if (outR != nullptr) { outL[i] = l; outR[i] = r; }
-            else outL[i] = 0.5f * (l + r);
+            else outL[i] = l;
             outPeak = std::max (outPeak, std::fabs (l));
+            limGrMin = std::min (limGrMin, limiter.grDb());
         }
     }
 
     if (sawBad)      // something went non-finite: flush all recursive state so it cannot persist
     {
-        hpf.reset(); lowShelf.reset(); peak.reset(); highShelf.reset();
-        compressor.reset(); deesser.reset(); delay.reset(); reverb.reset(); corrector.reset();
+        for (auto* f : { &hpf, &hpf2, &mudBq, &boxBq, &lowShelf, &peak, &highShelf, &lpf, &revHpL, &revHpR, &revLpL, &revLpR }) f->reset();
+        compressor.reset(); deesser.reset(); drive.reset(); expander.reset(); delay.reset(); preDelay.reset(); ducker.reset(); doubler.reset();
+        limiter.reset(); reverb.reset(); corrector.reset();
     }
 
     grDbMeter.store (grMin);
@@ -251,6 +404,13 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         sharedBus.detectedMidi.store (corrector.detectedMidi.load()); sharedBus.targetMidi.store (corrector.targetMidi.load());
         sharedBus.activeInstance.store (instanceId);
         if (active) sharedBus.lastActiveMs.store (now);
+        sharedBus.momentaryLufs.store (loudness.momentary); sharedBus.shortTermLufs.store (loudness.shortTerm);
+        sharedBus.integratedLufs.store (loudness.integrated); sharedBus.outPeakDb.store (loudness.truePeakDb);
+        sharedBus.limiterGrDb.store (limGrMin);
+    }
+    {
+        const int g = sharedBus.lufsResetGen.load();
+        if (g != handledLufsGen) { handledLufsGen = g; loudness.resetAll(); }
     }
 }
 

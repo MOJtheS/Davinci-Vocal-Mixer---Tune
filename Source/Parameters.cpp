@@ -56,8 +56,92 @@ APVTS::ParameterLayout createParameterLayout()
     l.add (std::make_unique<P> (PID (ID::outGain, v), "Output", fullRange (-24, 12), 0.f,
                                 juce::AudioParameterFloatAttributes().withLabel ("dB")));
     l.add (std::make_unique<P> (PID (ID::mix, v), "Dry/Wet", fullRange (0, 100), 100.f, pctAttr));
+
+    // ================= v0.3 additions (appended; version 2) =================
+    constexpr int v2 = 2;
+    const auto logRange = [] (float lo, float hi, float skew = 0.4f) { return juce::NormalisableRange<float> (lo, hi, 0.1f, skew); };
+    const auto dbLab = juce::AudioParameterFloatAttributes().withLabel ("dB");
+    const auto hzLab = juce::AudioParameterFloatAttributes().withLabel ("Hz");
+    const auto msLab = juce::AudioParameterFloatAttributes().withLabel ("ms");
+    const auto autoIfLow = [] (float lim, const char* text, const char* unit)
+    {
+        return juce::AudioParameterFloatAttributes().withStringFromValueFunction ([=] (float x, int) { return x <= lim ? juce::String (text) : juce::String (x, 1) + " " + unit; });
+    };
+
+    // master / limiter
+    l.add (std::make_unique<B> (PID (ID::limOn, v2), "Limiter", false));
+    l.add (std::make_unique<P> (PID (ID::limCeil, v2), "Limiter Ceiling", fullRange (-6, 0), -1.f, dbLab));
+    l.add (std::make_unique<P> (PID (ID::limRelease, v2), "Limiter Release", logRange (20, 500, 0.5f), 100.f, msLab));
+    l.add (std::make_unique<P> (PID (ID::limGain, v2), "Limiter Gain", fullRange (0, 12), 0.f, dbLab));
+    // eq
+    l.add (std::make_unique<B> (PID (ID::eqManual, v2), "EQ Manual Frequencies", false));
+    l.add (std::make_unique<P> (PID (ID::eqHpfFreq, v2), "HPF Frequency", logRange (40, 200), 110.f, hzLab));
+    l.add (std::make_unique<C> (PID (ID::eqHpfSlope, v2), "HPF Slope", juce::StringArray { "12 dB/oct", "24 dB/oct" }, 0));
+    l.add (std::make_unique<P> (PID (ID::eqLowFreq, v2), "Low Shelf Frequency", logRange (80, 400), 240.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::eqMudFreq, v2), "Mud Frequency", logRange (150, 500), 300.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::eqMudGain, v2), "Mud Gain", fullRange (-9, 3), 0.f, dbLab));
+    l.add (std::make_unique<P> (PID (ID::eqMudQ, v2), "Mud Q", fullRange (0.4f, 4), 1.0f));
+    l.add (std::make_unique<P> (PID (ID::eqBoxFreq, v2), "Box Frequency", logRange (500, 1200), 800.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::eqBoxGain, v2), "Box Gain", fullRange (-9, 3), 0.f, dbLab));
+    l.add (std::make_unique<P> (PID (ID::eqBoxQ, v2), "Box Q", fullRange (0.4f, 4), 1.5f));
+    l.add (std::make_unique<P> (PID (ID::eqPresFreq, v2), "Presence Frequency", logRange (2000, 6000), 3800.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::eqPresQ, v2), "Presence Q", fullRange (0.4f, 3), 0.9f));
+    l.add (std::make_unique<P> (PID (ID::eqAirFreq, v2), "Air Frequency", logRange (6000, 16000), 11000.f, hzLab));
+    l.add (std::make_unique<B> (PID (ID::eqLpfOn, v2), "Low-pass On", false));
+    l.add (std::make_unique<P> (PID (ID::eqLpfFreq, v2), "Low-pass Frequency", logRange (8000, 20000), 16000.f, hzLab));
+    // compressor
+    l.add (std::make_unique<P> (PID (ID::compRatio, v2), "Comp Ratio", fullRange (1, 10), 1.f,
+                                juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return x <= 1.05f ? juce::String ("Auto") : juce::String (x, 1) + ":1"; })));
+    l.add (std::make_unique<P> (PID (ID::compAttack, v2), "Comp Attack", logRange (0.5f, 50, 0.5f), 8.f, msLab));
+    l.add (std::make_unique<P> (PID (ID::compRelease, v2), "Comp Release", logRange (30, 500, 0.5f), 120.f, msLab));
+    l.add (std::make_unique<P> (PID (ID::compKnee, v2), "Comp Knee", fullRange (0, 12), 6.f, dbLab));
+    l.add (std::make_unique<P> (PID (ID::compMix, v2), "Comp Mix", fullRange (0, 100), 100.f, pctAttr));
+    l.add (std::make_unique<C> (PID (ID::compDet, v2), "Comp Detector", juce::StringArray { "Peak", "RMS" }, 0));
+    l.add (std::make_unique<P> (PID (ID::compSc, v2), "Comp Sidechain HPF", logRange (20, 500, 0.5f), 20.f, autoIfLow (20.5f, "Off", "Hz")));
+    l.add (std::make_unique<P> (PID (ID::compThr, v2), "Comp Threshold Trim", fullRange (-12, 12), 0.f, dbLab));
+    l.add (std::make_unique<P> (PID (ID::compMk, v2), "Comp Make-up Trim", fullRange (-12, 12), 0.f, dbLab));
+    // de-esser
+    l.add (std::make_unique<P> (PID (ID::dsFreq, v2), "De-Ess Frequency", logRange (4000, 12000), 5500.f, hzLab));
+    l.add (std::make_unique<C> (PID (ID::dsMode, v2), "De-Ess Mode", juce::StringArray { "Band", "Split (v0.2)", "Wide" }, 0));
+    l.add (std::make_unique<P> (PID (ID::dsRange, v2), "De-Ess Range", fullRange (0, 15), 0.f, autoIfLow (0.05f, "Auto", "dB")));
+    l.add (std::make_unique<P> (PID (ID::dsThr, v2), "De-Ess Threshold Trim", fullRange (-12, 12), 0.f, dbLab));
+    l.add (std::make_unique<B> (PID (ID::dsListen, v2), "De-Ess Listen", false));
+    // colour
+    l.add (std::make_unique<C> (PID (ID::colType, v2), "Saturation Type", juce::StringArray { "Soft", "Tube", "Tape" }, 0));
+    l.add (std::make_unique<P> (PID (ID::colTone, v2), "Saturation Tone", fullRange (-100, 100), 0.f, pctAttr));
+    l.add (std::make_unique<P> (PID (ID::colMix, v2), "Saturation Mix", fullRange (0, 100), 100.f, pctAttr));
+    l.add (std::make_unique<P> (PID (ID::excFreq, v2), "Exciter Frequency", logRange (3000, 8000), 5000.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::excAmt, v2), "Exciter Amount", fullRange (0, 100), 0.f, pctAttr));
+    // space
+    l.add (std::make_unique<P> (PID (ID::revPre, v2), "Reverb Pre-delay", fullRange (0, 120), 0.f, msLab));
+    l.add (std::make_unique<B> (PID (ID::revFilt, v2), "Reverb Filters On", false));
+    l.add (std::make_unique<P> (PID (ID::revLo, v2), "Reverb Low Cut", logRange (60, 600), 200.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::revHi, v2), "Reverb High Cut", logRange (3000, 20000), 9000.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::duck, v2), "Ducking", fullRange (0, 100), 0.f, pctAttr));
+    {
+        juce::StringArray ex; for (auto* n : kDelayTimeExNames) ex.add (n);
+        l.add (std::make_unique<C> (PID (ID::dlyTimeEx, v2), "Delay Note", ex, 0));
+    }
+    l.add (std::make_unique<P> (PID (ID::dlyFree, v2), "Delay Free Time", logRange (20, 1000, 0.5f), 350.f, msLab));
+    l.add (std::make_unique<B> (PID (ID::dlyFilt, v2), "Delay Feedback Filters On", false));
+    l.add (std::make_unique<P> (PID (ID::dlyHpf, v2), "Delay High-pass", logRange (60, 600), 200.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::dlyLpf, v2), "Delay Low-pass", logRange (1500, 12000), 5000.f, hzLab));
+    // stereo
+    l.add (std::make_unique<P> (PID (ID::dblMix, v2), "Double Mix", fullRange (0, 50), 0.f, pctAttr));
+    l.add (std::make_unique<P> (PID (ID::dblDelay, v2), "Double Delay", fullRange (8, 30), 15.f, msLab));
+    l.add (std::make_unique<P> (PID (ID::dblDetune, v2), "Double Detune", fullRange (0, 15), 8.f, juce::AudioParameterFloatAttributes().withLabel ("ct")));
+    l.add (std::make_unique<P> (PID (ID::dblHpf, v2), "Double High-pass", logRange (100, 400), 200.f, hzLab));
+    l.add (std::make_unique<P> (PID (ID::width, v2), "Width", fullRange (0, 150), 100.f, pctAttr));
+    l.add (std::make_unique<B> (PID (ID::monoCheck, v2), "Mono Check", false));
+    // clean
+    l.add (std::make_unique<B> (PID (ID::expOn, v2), "Expander On", false));
+    l.add (std::make_unique<P> (PID (ID::expThr, v2), "Expander Threshold", fullRange (-70, -20), -50.f, dbLab));
+    l.add (std::make_unique<P> (PID (ID::expRange, v2), "Expander Range", fullRange (0, 24), 12.f, dbLab));
+    l.add (std::make_unique<P> (PID (ID::expHold, v2), "Expander Hold", fullRange (0, 300), 100.f, msLab));
+    l.add (std::make_unique<P> (PID (ID::expRel, v2), "Expander Release", logRange (50, 600, 0.5f), 250.f, msLab));
     return l;
 }
+
 
 //                  genre name        warm pres air  comp ds  drv | revMix size decay | dlyMix fb  time ping | spd vib flex
 static const Preset kPresets[] = {

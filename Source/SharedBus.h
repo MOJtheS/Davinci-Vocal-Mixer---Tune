@@ -22,6 +22,14 @@ struct SharedBus
     std::atomic<int64_t> lastActiveMs { 0 };
     std::atomic<int>     activeInstance { 0 };
 
+    // ---- master section read-outs (written by the active instance) ----
+    std::atomic<float>   momentaryLufs { -100.f };
+    std::atomic<float>   shortTermLufs { -100.f };
+    std::atomic<float>   integratedLufs { -100.f };
+    std::atomic<float>   outPeakDb { -100.f };       // sample peak of the final output since the last reset
+    std::atomic<float>   limiterGrDb { 0.f };
+    std::atomic<int>     lufsResetGen { 0 };          // bumped by the UI to restart integrated loudness / peak
+
     // ---- "Listening" ----
     enum ListenState { idle = 0, listening = 1, done = 2, writing = 3 };
     std::atomic<int>   listenState { idle };

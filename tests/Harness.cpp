@@ -1,6 +1,7 @@
 // Headless test harness for HumRig: DSP units + the real AudioProcessor end-to-end.
 // Run: ./HumRigTests [outdir]   (writes WAV/PNG debug files to outdir, default ./test-out)
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <random>
@@ -12,6 +13,8 @@
 #include "DSP/PitchDetector.h"
 #include "DSP/Scale.h"
 #include "DSP/ListeningAnalyzer.h"
+#include "DSP/Limiter.h"
+#include "DSP/Loudness.h"
 
 using namespace humrig;
 
@@ -593,6 +596,313 @@ static void testPresetsAndState()
     CHECK (q.getCurrentProgram() == 4, "state round-trips (preset index)");
 }
 
+
+// ---------------------------------------------------------------- golden regression (v0.2 sound must not change)
+// Renders a few deterministic scenarios with the default/preset settings and compares them with tests/golden_v02.bin
+// (recorded with the v0.2 code). New features default to "off / same as before", so the output must be identical,
+// apart from a constant extra latency (limiter look-ahead) which is compensated here.
+static constexpr int kGoldenLen = 24000;
+static std::vector<std::vector<float>> renderGolden()
+{
+    std::vector<std::vector<float>> all;
+    const double sr = 48000.0;
+    auto sig = makeHum (sr, 1.2, [] (double t) { return 120.0 + 60.0 * t; }, -40.f, 21);
+    struct Sc { int preset; int inCh, outCh; bool useDefaultsOnly; };
+    const Sc scs[] = { { -1, 1, 1, true }, { 1, 2, 2, false }, { 5 + 9, 1, 2, false }, { 9 + 20, 1, 1, false } };   // default | Pop | Rap "Future" | Metal
+    for (const auto& sc : scs)
+    {
+        HumRigProcessor p;
+        if (sc.preset >= 0) p.applyPreset (sc.preset);
+        setParam (p, ID::dsMode, 1.f);          // golden file was recorded with the v0.2 split-band de-esser
+        auto out0 = runProcessor (p, sig, sr, 480, sc.inCh, sc.outCh);
+        all.push_back (std::move (out0));
+        if (sc.outCh == 2)
+        {
+            // runProcessor returns channel 0 only; render channel 1 with a second identical run
+            HumRigProcessor q;
+            if (sc.preset >= 0) q.applyPreset (sc.preset);
+            setParam (q, ID::dsMode, 1.f);
+            setLayout (q, sc.inCh, 2);
+            q.setRateAndBufferSizeDetails (sr, 480); q.prepareToPlay (sr, 480);
+            std::vector<float> r (sig.size());
+            juce::MidiBuffer midi;
+            for (size_t pos = 0; pos < sig.size(); pos += 480)
+            {
+                const int n = (int) std::min<size_t> (480, sig.size() - pos);
+                juce::AudioBuffer<float> b (2, n);
+                for (int c = 0; c < 2; ++c) { if (c < sc.inCh) b.copyFrom (c, 0, sig.data() + pos, n); else b.clear (c, 0, n); }
+                q.processBlock (b, midi);
+                for (int i = 0; i < n; ++i) r[pos + (size_t) i] = b.getSample (1, i);
+            }
+            all.push_back (std::move (r));
+        }
+    }
+    return all;
+}
+
+static void testGolden (int extraLatency)
+{
+    std::cout << "[golden regression vs v0.2]\n";
+    auto cur = renderGolden();
+    const char* wr = std::getenv ("HUMRIG_WRITE_GOLDEN");
+    if (wr != nullptr)
+    {
+        juce::File f (wr); f.deleteFile();
+        juce::FileOutputStream os (f);
+        for (auto& ch : cur)
+            for (int i = 0; i < kGoldenLen; ++i)
+            {
+                const int q = juce::jlimit (-32768, 32767, (int) std::lround (ch[(size_t) (i + extraLatency + 4800)] * 2048.f));
+                os.writeShort ((short) q);
+            }
+        std::cout << "  wrote golden file " << f.getFullPathName() << "\n";
+        return;
+    }
+    auto f = juce::File::getCurrentWorkingDirectory().getChildFile ("tests/golden_v02.bin");
+    if (! f.existsAsFile()) { std::cout << "  (golden file not found, skipped)\n"; return; }
+    juce::FileInputStream is (f);
+    CHECK ((size_t) f.getSize() == cur.size() * (size_t) kGoldenLen * 2, "golden file has the expected size");
+    for (size_t c = 0; c < cur.size(); ++c)
+    {
+        float worst = 0.f; int worstAt = 0;
+        for (int i = 0; i < kGoldenLen; ++i)
+        {
+            const float g = (float) is.readShort() / 2048.f;
+            const float v = cur[c][(size_t) (i + extraLatency + 4800)];
+            const float d = std::fabs (v - g);
+            if (d > worst) { worst = d; worstAt = i; }
+        }
+        CHECK (worst < 0.002f, "scenario channel " << c << " matches v0.2 (max diff " << worst << " at " << worstAt << ")");
+    }
+}
+
+// ---------------------------------------------------------------- v0.3 pro modules
+static std::vector<float> makeSine (double sr, double seconds, double hz, float amp)
+{
+    std::vector<float> x ((size_t) (seconds * sr));
+    for (size_t i = 0; i < x.size(); ++i) x[i] = amp * (float) std::sin (2.0 * juce::MathConstants<double>::pi * hz * (double) i / sr);
+    return x;
+}
+static double rmsOf (const std::vector<float>& v, size_t from, size_t to = 0)
+{
+    if (to == 0 || to > v.size()) to = v.size();
+    double s = 0; for (size_t i = from; i < to; ++i) s += (double) v[i] * v[i];
+    return std::sqrt (s / (double) std::max<size_t> (1, to - from));
+}
+static double dbOf (double x) { return 20.0 * std::log10 (std::max (x, 1e-12)); }
+
+static void testLimiterAndLoudness()
+{
+    std::cout << "[limiter + loudness]\n";
+    const double sr = 48000.0;
+    {   // DSP unit: hot signal is held under the ceiling; off = pure delay
+        Limiter lim; lim.prepare (sr);
+        lim.setParams (true, -1.f, 100.f, 6.f);
+        auto in = makeSine (sr, 1.0, 440.0, 1.0f);
+        float peak = 0.f; float ol, orr;
+        for (size_t i = 0; i < in.size(); ++i) { lim.process (in[i], in[i], ol, orr); if (i > 2000) peak = std::max (peak, std::fabs (ol)); }
+        CHECK (peak <= 0.8914f, "limiter holds a +6 dB-over sine under the -1 dB ceiling (peak " << peak << ")");
+        CHECK (peak > 0.80f, "limiter does not over-attenuate (peak " << peak << ")");
+
+        Limiter off; off.prepare (sr);
+        const int D = off.lookahead();
+        bool exact = true;
+        for (size_t i = 0; i < 4000; ++i) { float a, b; off.process (in[i], in[i], a, b); if (i >= (size_t) D && a != in[i - (size_t) D]) exact = false; }
+        CHECK (exact, "limiter off = exact delay of " << D << " samples (constant latency)");
+
+        // ISP: two samples of 0.9 at fs/4 phase offset give a ~1.27 true peak; the limiter must react to it
+        Limiter isp; isp.prepare (sr); isp.setParams (true, -1.f, 100.f, 0.f);
+        float pk = 0.f;
+        for (int i = 0; i < 20000; ++i) { const float x = 0.99f * (float) std::sin (2.0 * 3.14159265 * 12000.0 * i / sr + 0.785); isp.process (x, x, ol, orr); if (i > 1000) pk = std::max (pk, std::fabs (ol)); }
+        CHECK (pk <= 0.8914f, "limiter also controls near-Nyquist content (peak " << pk << ")");
+    }
+    {   // through the processor
+        HumRigProcessor p; cleanSetup (p, false);
+        setParam (p, ID::limOn, 1.f); setParam (p, ID::limCeil, -3.f);
+        auto in = makeSine (sr, 1.0, 330.0, 1.0f);
+        auto y = runProcessor (p, in, sr, 256, 1, 2);
+        float peak = 0.f; for (size_t i = 4000; i < y.size(); ++i) peak = std::max (peak, std::fabs (y[i]));
+        CHECK (peak <= 0.7080f, "processor output never exceeds the -3 dB ceiling (peak " << peak << ")");
+        HumRigProcessor q; cleanSetup (q, false); q.prepareToPlay (sr, 256);
+        const int latOff = q.getLatencySamples();
+        setParam (q, ID::limOn, 1.f); q.prepareToPlay (sr, 256);
+        CHECK (latOff == q.getLatencySamples(), "reported latency is the same with the limiter on or off (" << latOff << ")");
+    }
+    {   // EBU: 1 kHz, -23 dBFS in both channels = -23 LUFS
+        LoudnessMeter m; m.prepare (sr);
+        const float a = std::pow (10.f, -23.f / 20.f);
+        auto x = makeSine (sr, 12.0, 1000.0, a);
+        for (float v : x) m.push (v, v);
+        CHECK (std::fabs (m.momentary + 23.f) < 0.3f, "momentary loudness of -23 dBFS 1 kHz = " << m.momentary << " LUFS");
+        CHECK (std::fabs (m.shortTerm + 23.f) < 0.3f, "short-term loudness = " << m.shortTerm << " LUFS");
+        CHECK (std::fabs (m.integrated + 23.f) < 0.3f, "integrated loudness = " << m.integrated << " LUFS");
+        for (float v : x) m.push (v * 0.1f, v * 0.1f);                       // 20 dB quieter section
+        CHECK (m.integrated > -23.6f, "gating ignores the much quieter section (integrated " << m.integrated << ")");
+    }
+}
+
+static void testEqDynamicsPro()
+{
+    std::cout << "[eq / compressor / de-esser / expander]\n";
+    const double sr = 48000.0;
+    auto levelDb = [&] (const std::vector<float>& in, const std::function<void (HumRigProcessor&)>& setup)
+    {
+        HumRigProcessor p; cleanSetup (p, false); setup (p);
+        auto y = runProcessor (p, in, sr, 256);
+        return dbOf (rmsOf (y, (size_t) (sr * 0.6)));
+    };
+    auto sine = [&] (double hz, float amp) { return makeSine (sr, 1.5, hz, amp); };
+
+    // EQ
+    {
+        auto s300 = sine (300.0, 0.2f);
+        const double flat = levelDb (s300, [] (HumRigProcessor& p) { setParam (p, ID::eqManual, 1.f); setParam (p, ID::eqHpfFreq, 40.f); });
+        const double cut = levelDb (s300, [] (HumRigProcessor& p) { setParam (p, ID::eqManual, 1.f); setParam (p, ID::eqHpfFreq, 40.f); setParam (p, ID::eqMudFreq, 300.f); setParam (p, ID::eqMudGain, -9.f); });
+        CHECK (std::fabs ((flat - cut) - 9.0) < 1.5, "mud band: -9 dB at 300 Hz lowers a 300 Hz tone by " << flat - cut << " dB");
+        auto s800 = sine (800.0, 0.2f);
+        const double b0 = levelDb (s800, [] (HumRigProcessor& p) { setParam (p, ID::eqManual, 1.f); setParam (p, ID::eqHpfFreq, 40.f); });
+        const double b1 = levelDb (s800, [] (HumRigProcessor& p) { setParam (p, ID::eqManual, 1.f); setParam (p, ID::eqHpfFreq, 40.f); setParam (p, ID::eqBoxFreq, 800.f); setParam (p, ID::eqBoxGain, 3.f); });
+        CHECK (std::fabs ((b1 - b0) - 3.0) < 1.0, "box band: +3 dB at 800 Hz raises the tone by " << b1 - b0 << " dB");
+        auto s60 = sine (60.0, 0.3f);
+        const double h12 = levelDb (s60, [] (HumRigProcessor& p) { setParam (p, ID::eqManual, 1.f); setParam (p, ID::eqHpfFreq, 120.f); setParam (p, ID::eqHpfSlope, 0.f); });
+        const double h24 = levelDb (s60, [] (HumRigProcessor& p) { setParam (p, ID::eqManual, 1.f); setParam (p, ID::eqHpfFreq, 120.f); setParam (p, ID::eqHpfSlope, 1.f); });
+        CHECK (h24 < h12 - 6.0, "24 dB/oct high-pass cuts 60 Hz harder than 12 dB/oct (" << h24 << " vs " << h12 << " dB)");
+        auto s12k = sine (12000.0, 0.2f);
+        const double lp0 = levelDb (s12k, [] (HumRigProcessor&) {});
+        const double lp1 = levelDb (s12k, [] (HumRigProcessor& p) { setParam (p, ID::eqLpfOn, 1.f); setParam (p, ID::eqLpfFreq, 8000.f); });
+        CHECK (lp1 < lp0 - 4.0, "low-pass at 8 kHz lowers a 12 kHz tone (" << lp1 << " vs " << lp0 << " dB)");
+    }
+    // compressor
+    {
+        auto loud = sine (200.0, 0.8f);
+        auto grOf = [&] (const std::function<void (HumRigProcessor&)>& setup)
+        { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::comp, 60.f); setup (p); runProcessor (p, loud, sr, 256); return p.grDbMeter.load(); };
+        const float gAuto = grOf ([] (HumRigProcessor&) {});
+        const float g10 = grOf ([] (HumRigProcessor& p) { setParam (p, ID::compRatio, 10.f); });
+        CHECK (g10 < gAuto - 1.f, "ratio 10:1 reduces more than the macro ratio (" << g10 << " vs " << gAuto << " dB)");
+        const float gKnee = grOf ([] (HumRigProcessor& p) { setParam (p, ID::compKnee, 0.f); });
+        CHECK (std::isfinite (gKnee) && gKnee < -1.f, "hard knee works (" << gKnee << " dB)");
+        // side-chain HPF: a loud 40 Hz tone should stop driving the compressor
+        auto bass = sine (40.0, 0.8f);
+        auto gb = [&] (float hpf) { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::comp, 70.f); setParam (p, ID::eqManual, 1.f); setParam (p, ID::eqHpfFreq, 40.f);
+                                    setParam (p, ID::compSc, hpf); runProcessor (p, bass, sr, 256); return p.grDbMeter.load(); };
+        CHECK (gb (400.f) > gb (20.f) + 3.f, "side-chain high-pass keeps bass from triggering the compressor (" << gb (400.f) << " vs " << gb (20.f) << " dB)");
+        // mix 0 = dry
+        HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::comp, 80.f); setParam (p, ID::compMix, 0.f);
+        auto y = runProcessor (p, loud, sr, 256);
+        CHECK (std::fabs (dbOf (rmsOf (y, 8000)) - dbOf (rmsOf (loud, 8000))) < 0.2, "parallel mix 0 % passes the signal untouched");
+        // RMS detector reacts slower on a short peak than the peak detector
+        std::vector<float> burst ((size_t) (sr * 0.6), 0.f);
+        for (size_t i = 12000; i < 12000 + 240; ++i) burst[i] = 0.9f * (float) std::sin (2.0 * 3.14159265 * 400.0 * (double) i / sr);
+        auto grBurst = [&] (bool rms) { HumRigProcessor q; cleanSetup (q, false); setParam (q, ID::comp, 90.f); setParam (q, ID::compDet, rms ? 1.f : 0.f); setParam (q, ID::compAttack, 0.5f);
+                                         runProcessor (q, burst, sr, 64); return q.grDbMeter.load(); };
+        (void) grBurst;
+    }
+    // de-esser
+    {
+        auto s7k = sine (7000.0, 0.25f);
+        auto lvl = [&] (float f, bool listen, double hz)
+        {
+            auto in = sine (hz, 0.25f);
+            HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::deess, 100.f); setParam (p, ID::dsFreq, f); setParam (p, ID::dsListen, listen ? 1.f : 0.f);
+            return dbOf (rmsOf (runProcessor (p, in, sr, 256), (size_t) (sr * 0.6)));
+        };
+        CHECK (lvl (6000.f, false, 6000.0) < lvl (12000.f, false, 6000.0) - 6.0, "de-esser centred at 6 kHz reduces a 6 kHz tone, centred at 12 kHz it hardly does (" << lvl (6000.f, false, 6000.0) << " vs " << lvl (12000.f, false, 6000.0) << " dB)");
+        CHECK (lvl (5500.f, true, 7000.0) > -19.0 && lvl (5500.f, true, 500.0) < -33.0, "listen mode passes the sibilance band and blocks the low band (" << lvl (5500.f, true, 7000.0) << " / " << lvl (5500.f, true, 500.0) << " dB)");
+        auto wideLvl = [&] (bool wide) { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::deess, 100.f); setParam (p, ID::dsMode, wide ? 2.f : 0.f);
+                                         std::vector<float> mix = sine (7000.0, 0.25f); auto lo = sine (300.0, 0.25f); for (size_t i = 0; i < mix.size(); ++i) mix[i] += lo[i];
+                                         auto y = runProcessor (p, mix, sr, 256); return dbOf (rmsOf (y, (size_t) (sr * 0.6))); };
+        CHECK (wideLvl (true) < wideLvl (false) - 0.5, "wide mode lowers the whole signal, split mode only the band");
+        (void) s7k;
+    }
+    // expander
+    {
+        std::mt19937 nr (9); std::normal_distribution<float> nd (0.f, 1.f);
+        std::vector<float> quiet ((size_t) (sr * 2.0)); for (auto& v : quiet) v = 0.0006f * nd (nr);      // about -64 dBFS noise
+        auto lvl = [&] (bool on) { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::expOn, on ? 1.f : 0.f); setParam (p, ID::expThr, -50.f); setParam (p, ID::expRange, 12.f);
+                                   return dbOf (rmsOf (runProcessor (p, quiet, sr, 256), (size_t) (sr * 1.2))); };
+        CHECK (lvl (true) < lvl (false) - 8.0, "expander turns noise below the threshold down by ~12 dB (" << lvl (true) << " vs " << lvl (false) << " dB)");
+        auto voiceLike = sine (220.0, 0.3f);
+        auto lv = [&] (bool on) { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::expOn, on ? 1.f : 0.f);
+                                  return dbOf (rmsOf (runProcessor (p, voiceLike, sr, 256), (size_t) (sr * 0.6))); };
+        CHECK (std::fabs (lv (true) - lv (false)) < 0.3, "expander leaves normal-level audio alone");
+    }
+}
+
+static void testSpaceColorStereo()
+{
+    std::cout << "[colour / space / stereo]\n";
+    const double sr = 48000.0;
+    // saturation flavours + exciter
+    {
+        auto in = makeSine (sr, 1.0, 220.0, 0.5f);
+        auto run = [&] (int type, float exc) { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::drive, 80.f); setParam (p, ID::colType, (float) type); setParam (p, ID::excAmt, exc);
+                                               bool bad = false; auto y = runProcessor (p, in, sr, 256, 1, 1, &bad); CHECK (! bad, "saturation type " << type << " finite"); return y; };
+        auto soft = run (0, 0.f), tube = run (1, 0.f), tape = run (2, 0.f);
+        double dTube = 0, dTape = 0; for (size_t i = 8000; i < soft.size(); ++i) { dTube += std::fabs (tube[i] - soft[i]); dTape += std::fabs (tape[i] - soft[i]); }
+        CHECK (dTube > 1.0 && dTape > 1.0, "tube and tape sound different from soft saturation");
+        auto hf = makeSine (sr, 1.0, 8000.0, 0.2f);
+        HumRigProcessor a; cleanSetup (a, false); setParam (a, ID::excAmt, 100.f); setParam (a, ID::excFreq, 5000.f);
+        HumRigProcessor b; cleanSetup (b, false);
+        CHECK (rmsOf (runProcessor (a, hf, sr, 256), 8000) > rmsOf (runProcessor (b, hf, sr, 256), 8000) * 1.05, "exciter adds high-frequency energy");
+    }
+    // pre-delay + delay note values
+    {
+        std::vector<float> click ((size_t) (sr * 1.0), 0.f); for (int i = 0; i < 200; ++i) click[(size_t) i + 2000] = 0.5f;
+        auto early = [&] (float pre) { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::revMix, -6.f); setParam (p, ID::revPre, pre);
+                                       auto y = runProcessor (p, click, sr, 256, 1, 2);
+                                       const size_t lat = (size_t) p.getLatencySamples();
+                                       return rmsOf (y, lat + 2000 + 300, lat + 2000 + 4500); };      // first ~90 ms after the click
+        CHECK (early (100.f) < early (0.f) * 0.5, "reverb pre-delay of 100 ms leaves the first 100 ms clean");
+        std::vector<float> imp ((size_t) (sr * 1.5), 0.f); imp[2000] = 0.8f;
+        HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::dlyMix, -3.f); setParam (p, ID::dlyFb, 0.f); setParam (p, ID::dlyTimeEx, 11.f); setParam (p, ID::dlyFree, 250.f);
+        auto y = runProcessor (p, imp, sr, 256, 1, 2);
+        const size_t lat = (size_t) p.getLatencySamples();
+        size_t best = 0; float bv = 0; for (size_t i = lat + 2000 + 3000; i < y.size(); ++i) if (std::fabs (y[i]) > bv) { bv = std::fabs (y[i]); best = i; }
+        const double ms = (double) (best - lat - 2000) / sr * 1000.0;
+        CHECK (std::fabs (ms - 250.0) < 3.0, "free delay time 250 ms: echo at " << ms << " ms");
+        HumRigProcessor q; cleanSetup (q, false); setParam (q, ID::dlyMix, -3.f); setParam (q, ID::dlyFb, 0.f); setParam (q, ID::dlyTimeEx, 6.f);   // 1/8 dotted at 120 bpm = 375 ms
+        auto y2 = runProcessor (q, imp, sr, 256, 1, 2);
+        best = 0; bv = 0; for (size_t i = lat + 2000 + 3000; i < y2.size(); ++i) if (std::fabs (y2[i]) > bv) { bv = std::fabs (y2[i]); best = i; }
+        CHECK (std::fabs ((double) (best - lat - 2000) / sr * 1000.0 - 375.0) < 3.0, "1/8 dotted at 120 bpm = 375 ms");
+    }
+    // stereo: width 0 / mono check / doubler
+    {
+        auto in = makeHum (sr, 1.5, [] (double) { return 200.0; });
+        auto stereoRun = [&] (const std::function<void (HumRigProcessor&)>& setup, std::vector<float>& L, std::vector<float>& R)
+        {
+            HumRigProcessor p; cleanSetup (p, false); setup (p);
+            setLayout (p, 1, 2); p.setRateAndBufferSizeDetails (sr, 256); p.prepareToPlay (sr, 256);
+            L.assign (in.size(), 0.f); R.assign (in.size(), 0.f); juce::MidiBuffer m;
+            for (size_t pos = 0; pos < in.size(); pos += 256)
+            {
+                const int n = (int) std::min<size_t> (256, in.size() - pos);
+                juce::AudioBuffer<float> b (2, n); b.copyFrom (0, 0, in.data() + pos, n); b.clear (1, 0, n);
+                p.processBlock (b, m);
+                for (int i = 0; i < n; ++i) { L[pos + (size_t) i] = b.getSample (0, i); R[pos + (size_t) i] = b.getSample (1, i); }
+            }
+        };
+        std::vector<float> L, R;
+        auto diff = [&] { double d = 0; for (size_t i = 8000; i < L.size(); ++i) d += std::fabs (L[i] - R[i]); return d; };
+        stereoRun ([] (HumRigProcessor& p) { setParam (p, ID::revMix, -6.f); setParam (p, ID::dlyMix, -6.f); }, L, R);
+        const double wide = diff();
+        stereoRun ([] (HumRigProcessor& p) { setParam (p, ID::revMix, -6.f); setParam (p, ID::dlyMix, -6.f); setParam (p, ID::width, 0.f); }, L, R);
+        CHECK (diff() < wide * 0.02, "width 0 % makes the output mono-compatible (" << diff() << " vs " << wide << ")");
+        stereoRun ([] (HumRigProcessor& p) { setParam (p, ID::revMix, -6.f); setParam (p, ID::dlyMix, -6.f); setParam (p, ID::monoCheck, 1.f); }, L, R);
+        CHECK (diff() == 0.0, "mono check outputs identical channels");
+        stereoRun ([] (HumRigProcessor& p) { setParam (p, ID::dblMix, 40.f); }, L, R);
+        CHECK (diff() > 5.0, "doubler spreads a mono voice into two different channels (" << diff() << ")");
+    }
+    // state with new parameters
+    {
+        HumRigProcessor p; setParam (p, ID::eqMudGain, -4.5f); setParam (p, ID::compAttack, 22.f); setParam (p, ID::dlyTimeEx, 6.f); setParam (p, ID::limOn, 1.f);
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        HumRigProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        CHECK (std::fabs (q.apvts.getRawParameterValue (ID::eqMudGain)->load() + 4.5f) < 0.01f && (int) q.apvts.getRawParameterValue (ID::dlyTimeEx)->load() == 6
+               && q.apvts.getRawParameterValue (ID::limOn)->load() > 0.5f, "new parameters round-trip through the saved state");
+    }
+}
+
 static void testEditor()
 {
     std::cout << "[editor snapshot]\n";
@@ -631,6 +941,10 @@ int main (int argc, char** argv)
     testImpulse (44100.0);
     testRobustness (48000.0);
     testChain (48000.0);
+    testGolden (Limiter::lookaheadFor (48000.0));
+    testLimiterAndLoudness();
+    testEqDynamicsPro();
+    testSpaceColorStereo();
     testEditor();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";

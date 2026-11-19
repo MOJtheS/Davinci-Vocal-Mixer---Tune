@@ -7,6 +7,8 @@
 #include "DSP/Biquad.h"
 #include "DSP/Dynamics.h"
 #include "DSP/Effects.h"
+#include "DSP/Limiter.h"
+#include "DSP/Loudness.h"
 #include "DSP/PitchCorrector.h"
 #include "DSP/ListeningAnalyzer.h"
 #include "SharedBus.h"
@@ -70,6 +72,10 @@ private:
             *revMix, *revSize, *revDecay, *dlyMix, *dlyFb, *dlyTime, *dlyPing,
             *inGain, *outGain, *mix;
     } p {};
+    struct Params2
+    {
+        std::atomic<float> *limOn, *limCeil, *limRelease, *limGain, *eqManual, *eqHpfFreq, *eqHpfSlope, *eqLowFreq, *eqMudFreq, *eqMudGain, *eqMudQ, *eqBoxFreq, *eqBoxGain, *eqBoxQ, *eqPresFreq, *eqPresQ, *eqAirFreq, *eqLpfOn, *eqLpfFreq, *compRatio, *compAttack, *compRelease, *compKnee, *compMix, *compDet, *compSc, *compThr, *compMk, *dsFreq, *dsMode, *dsRange, *dsThr, *dsListen, *colType, *colTone, *colMix, *excFreq, *excAmt, *revPre, *revFilt, *revLo, *revHi, *duck, *dlyTimeEx, *dlyFree, *dlyFilt, *dlyHpf, *dlyLpf, *dblMix, *dblDelay, *dblDetune, *dblHpf, *width, *monoCheck, *expOn, *expThr, *expRange, *expHold, *expRel;
+    } q {};
 
     void updateEq();
     static float mixDbToLin (float db) { return db <= humrig::kMixOffDb + 0.05f ? 0.f : juce::Decibels::decibelsToGain (db); }
@@ -78,12 +84,23 @@ private:
     int maxBlock = 512;
 
     humrig::PitchCorrector corrector;
-    humrig::Biquad hpf, lowShelf, peak, highShelf;
+    humrig::Biquad hpf, hpf2, mudBq, boxBq, lowShelf, peak, highShelf, lpf;
+    humrig::Biquad revHpL, revHpR, revLpL, revLpR;
+    humrig::Expander expander;
     humrig::Compressor compressor;
     humrig::DeEsser deesser;
     humrig::Drive drive;
     humrig::StereoDelay delay;
+    humrig::PreDelay preDelay;
+    humrig::Ducker ducker;
+    humrig::Doubler doubler;
+    humrig::Limiter limiter;
+    humrig::LoudnessMeter loudness;
     juce::Reverb reverb;
+    int handledLufsGen = 0;
+    bool hpf24 = false, mudOn = false, boxOn = false, lpfOn = false;
+    float lastRevLo = -1.f, lastRevHi = -1.f;
+    std::array<float, 24> lastEq {};
 
     std::array<std::vector<float>, 2> dryRing;   // latency-aligned dry for the Dry/Wet control
     int dryPos = 0;
@@ -91,7 +108,6 @@ private:
     std::vector<float> monoRaw, monoIn, monoTuned, voice, dlyL, dlyR, revL, revR;
     juce::SmoothedValue<float> inGainSm, outGainSm, mixSm;
 
-    float lastVoice = -1.f, lastWarmth = -1.f, lastPresence = -1.f, lastAir = -1.f;
     int currentPreset = 0;
 
     humrig::ListeningAnalyzer analyzer;
