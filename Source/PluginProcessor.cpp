@@ -291,6 +291,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
                     o.key = r.key; o.minor = r.minor ? 1 : 0; o.female = r.female ? 1 : 0; o.range = r.range;
                     o.medianF0 = r.medianF0; o.keyConfidence = r.keyConfidence; o.inGainDb = r.inGainDb;
                     o.comp = r.comp; o.warmth = r.warmth; o.presence = r.presence; o.air = r.air; o.deess = r.deess;
+                    o.expOn = r.expOn ? 1 : 0; o.expThr = r.expThr; o.expRange = r.expRange; o.mudGain = r.mudGain; o.dsFreq = r.dsFreq;
                     sharedBus.resultGen.store (handledGen);
                     sharedBus.listenProgress.store (1.f);
                     sharedBus.listenState.store (r.valid ? SharedBus::done : SharedBus::idle);
@@ -470,6 +471,10 @@ bool HumRigProcessor::applyListeningResults (int generation)
     set (ID::comp, r.comp.load());
     set (ID::warmth, r.warmth.load()); set (ID::presence, r.presence.load()); set (ID::air, r.air.load());
     set (ID::deess, r.deess.load());
+    set (ID::expOn, r.expOn.load() ? 1.f : 0.f);
+    if (r.expOn.load()) { set (ID::expThr, r.expThr.load()); set (ID::expRange, r.expRange.load()); }
+    set (ID::eqMudGain, r.mudGain.load());
+    set (ID::dsFreq, r.dsFreq.load());
     return true;
 }
 

@@ -79,7 +79,8 @@ private:
     {
         float rp = (float) pos - delay;
         if (rp < 0.f) rp += (float) size;
-        const int i0 = (int) rp;
+        if (rp >= (float) size) rp -= (float) size;        // float rounding can land exactly on `size`
+        const int i0 = std::clamp ((int) rp, 0, size - 1);
         const float f = rp - (float) i0;
         const int i1 = (i0 + 1 >= size) ? 0 : i0 + 1;
         return b[(size_t) i0] * (1.f - f) + b[(size_t) i1] * f;
@@ -194,7 +195,8 @@ private:
         delay = std::clamp (delay, 1.f, (float) (size - 3));
         float rp = (float) pos - delay;
         if (rp < 0.f) rp += (float) size;
-        const int i0 = (int) rp;
+        if (rp >= (float) size) rp -= (float) size;        // float rounding can land exactly on `size`
+        const int i0 = std::clamp ((int) rp, 0, size - 1);
         const float f = rp - (float) i0;
         const int i1 = (i0 + 1 >= size) ? 0 : i0 + 1;
         return buf[(size_t) i0] * (1.f - f) + buf[(size_t) i1] * f;

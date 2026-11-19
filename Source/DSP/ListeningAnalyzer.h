@@ -26,6 +26,11 @@ public:
         int   range = 0;             // 0 Auto, 1 Soprano, 2 Alto/Tenor, 3 Bass
         float inGainDb = 0.f;
         float comp = 40.f, warmth = 50.f, presence = 50.f, air = 50.f, deess = 40.f;
+        // detailed controls (v0.3)
+        bool  expOn = false; float expThr = -50.f, expRange = 10.f;   // expander: only suggested when there are real pauses with a measurable noise floor
+        float mudGain = 0.f;                                         // dB cut around 300 Hz when the low-mids dominate
+        float dsFreq = 5500.f;                                       // de-esser band by voice type
+        float noiseFloorDb = -120.f;                                 // information only (raw input level)
     };
 
     static constexpr double neededVoicedSeconds = 6.0;
@@ -42,7 +47,7 @@ public:
         mid.makeBandPass (sr, 3000.0, 0.8);
         sib.makeBandPass (sr, 7000.0, 1.5);
         air.makeHighPass (sr, 9000.0, 0.707);
-        f0s.reserve (4096); levelsDb.reserve (4096);
+        f0s.reserve (4096); levelsDb.reserve (4096); allLevels.reserve (8192);
         reset();
     }
 
@@ -52,7 +57,7 @@ public:
         histPos = 0; decimCount = 0; decimAcc = 0.f; untilHop = hop;
         low.reset(); mid.reset(); sib.reset(); air.reset();
         chroma.fill (0.0);
-        f0s.clear(); levelsDb.clear();
+        f0s.clear(); levelsDb.clear(); allLevels.clear();
         voicedSeconds = totalSeconds = 0.0;
         eLow = eMid = eSib = eAir = eTot = 0.0;
         hopEnergy = hopLow = hopMid = hopSib = hopAir = 0.0;
@@ -135,6 +140,24 @@ public:
         r.air      = (float) std::round (50.0 + std::clamp ((refA - A) * 1.0, -20.0, 20.0));
         const double S = std::max (share (eSib), -60.0);          // 7 kHz band energy re total (typical sung vocal: about -40..-30 dB)
         r.deess = (float) std::round (std::clamp (30.0 + (S + 40.0) * 2.0, 20.0, 85.0));
+
+        // ---- detailed controls ----
+        r.dsFreq = r.female ? 7000.f : 5500.f;
+        r.mudGain = (float) -std::round (std::clamp ((L - M - 14.0) * 0.4, 0.0, 4.0) * 2.0) / 2.f;
+        if (allLevels.size() >= 30)
+        {
+            std::vector<float> all = allLevels;
+            std::sort (all.begin(), all.end());
+            const float noise = all[all.size() / 10];                    // quietest tenth of all 6 ms slices = the noise floor between phrases
+            r.noiseFloorDb = noise;
+            if (med - noise >= 20.f && noise > -90.f)                  // real pauses and a measurable floor
+            {
+                r.expOn = true;
+                const float thr = std::min (noise + 8.f, med - 14.f) + r.inGainDb;    // the expander sits after the input gain
+                r.expThr = std::round (std::clamp (thr, -65.f, -30.f));
+                r.expRange = std::round (std::clamp ((med - noise) * 0.35f, 6.f, 14.f));
+            }
+        }
         return r;
     }
 
@@ -158,6 +181,7 @@ private:
         const double hopSec = (double) hop / sr;
         totalSeconds += hopSec;
         const double rms = std::sqrt (hopEnergy / (double) hop);
+        if (allLevels.size() < allLevels.capacity()) allLevels.push_back ((float) (20.0 * std::log10 (std::max (rms, 1e-9))));
         const bool loud = rms > 0.001;                         // > about -60 dBFS (quiet phone recordings still count)
         if (loud)
         {
@@ -185,7 +209,7 @@ private:
     int decim = 2, hop = 256, untilHop = 256, histPos = 0, decimCount = 0;
     float decimAcc = 0.f;
     PitchDetector detector;
-    std::vector<float> hist, linear, f0s, levelsDb;
+    std::vector<float> hist, linear, f0s, levelsDb, allLevels;
     Biquad low, mid, sib, air;
     std::array<double, 12> chroma {};
     double voicedSeconds = 0, totalSeconds = 0;

@@ -382,6 +382,27 @@ static void testListening()
         auto r0 = analyse (base, sr), r1 = analyse (dull, sr);
         CHECK (r1.presence > r0.presence || r1.air > r0.air, "dull take suggests more presence/air (presence " << r0.presence << " -> " << r1.presence << ", air " << r0.air << " -> " << r1.air << ")");
     }
+    // noise between phrases -> expander suggestion; a take without pauses -> none
+    {
+        std::mt19937 rng (12); std::normal_distribution<float> nd (0.f, 1.f);
+        auto melody = makeMelody (sr, 16.0, aMinorMale, 0.25f);
+        auto gappy = melody;
+        for (size_t i = 0; i < gappy.size(); ++i)
+        {
+            const bool gap = ((size_t) ((double) i / sr / 0.6) % 2) == 1;                 // every other 0.6 s is a pause
+            if (gap) gappy[i] = 0.f;
+            gappy[i] += 0.0008f * nd (rng);                                              // noise floor about -62 dBFS
+        }
+        auto g = analyse (gappy, sr);
+        CHECK (g.valid && g.expOn, "pauses with a noise floor -> expander suggested (noise floor " << g.noiseFloorDb << " dB)");
+        CHECK (g.expOn && g.expThr > g.noiseFloorDb + g.inGainDb && g.expThr < -30.f, "suggested expander threshold " << g.expThr << " dB sits above the noise and below the voice");
+        auto cont = melody;
+        for (auto& v : cont) v += 0.0008f * nd (rng);
+        auto cr = analyse (cont, sr);
+        CHECK (cr.valid && ! cr.expOn, "a take without pauses does not get an expander");
+        CHECK (a.mudGain <= 0.f && a.mudGain >= -4.f, "mud cut suggestion is within 0..-4 dB (" << a.mudGain << ")");
+        CHECK (c.dsFreq == 7000.f && a.dsFreq == 5500.f, "de-esser frequency follows the voice type");
+    }
     CHECK (analyse (std::vector<float> ((size_t) (sr * 3), 0.f), sr).valid == false, "silence produces no result");
 }
 
@@ -971,6 +992,42 @@ static void testScopeFeed()
     CHECK (a1k > 0.1 && a1k > a5k * 20.0, "the feed carries the 1 kHz tone (" << a1k << " vs " << a5k << " at 5 kHz)");
 }
 
+// every detailed control at random values, many sample rates / block sizes / layouts: output must stay finite and bounded
+static void testRandomParameters()
+{
+    std::cout << "[random parameter stress]\n";
+    std::mt19937 rng (2024);
+    int n = 0; const char* const* ids = detailedParamIds (n);
+    bool finite = true, bounded = true, ceilingOk = true; int runs = 0;
+    const double rates[] = { 8000.0, 22050.0, 44100.0, 48000.0, 96000.0, 192000.0 };
+    std::uniform_real_distribution<float> ud (0.f, 1.f);
+    std::normal_distribution<float> nd (0.f, 0.5f);
+    for (int iter = 0; iter < 36; ++iter)
+    {
+        const double sr = rates[iter % 6];
+        HumRigProcessor p;
+        for (int i = 0; i < n; ++i)
+            if (auto* prm = p.apvts.getParameter (ids[i])) prm->setValueNotifyingHost (ud (rng));
+        for (const char* id : { ID::comp, ID::deess, ID::drive, ID::warmth, ID::presence, ID::air, ID::inGain, ID::revMix, ID::dlyMix })
+            if (auto* prm = p.apvts.getParameter (id)) prm->setValueNotifyingHost (ud (rng));
+        const bool lim = (iter % 2) == 0;
+        setParam (p, ID::limOn, lim ? 1.f : 0.f); setParam (p, ID::limCeil, -1.f); setParam (p, ID::dsListen, 0.f);
+        std::vector<float> in ((size_t) (sr * 0.6));
+        for (size_t i = 0; i < in.size(); ++i) in[i] = 0.4f * (float) std::sin (2.0 * 3.14159265 * 200.0 * (double) i / sr) + 0.3f * nd (rng);
+        const int block = (iter % 3 == 0) ? 64 : (iter % 3 == 1 ? 480 : 1000);
+        const bool stereoOut = (iter % 4) != 1;
+        bool bad = false;
+        auto y = runProcessor (p, in, sr, block, 1, stereoOut ? 2 : 1, &bad);
+        ++runs;
+        if (bad) finite = false;
+        float pk = 0.f; for (size_t k = (size_t) (sr * 0.2); k < y.size(); ++k) pk = std::max (pk, std::fabs (y[k]));
+        if (pk > 16.f) bounded = false;
+        if (lim && pk > 0.8914f) { ceilingOk = false; std::cout << "  ceiling exceeded: peak " << pk << " at " << sr << " Hz\n"; }
+    }
+    CHECK (finite && bounded, runs << " random parameter sets at 8k-192k stay finite and bounded");
+    CHECK (ceilingOk, "the limiter holds its ceiling with random settings");
+}
+
 static void testEditor()
 {
     std::cout << "[editor snapshot]\n";
@@ -1027,6 +1084,7 @@ int main (int argc, char** argv)
     testEqDynamicsPro();
     testSpaceColorStereo();
     testScopeFeed();
+    testRandomParameters();
     testEditor();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";

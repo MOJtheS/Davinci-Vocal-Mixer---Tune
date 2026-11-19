@@ -56,6 +56,11 @@ struct SharedBus
         std::atomic<float> presence { 50.f };
         std::atomic<float> air { 50.f };
         std::atomic<float> deess { 40.f };
+        std::atomic<int>   expOn { 0 };
+        std::atomic<float> expThr { -50.f };
+        std::atomic<float> expRange { 10.f };
+        std::atomic<float> mudGain { 0.f };
+        std::atomic<float> dsFreq { 5500.f };
     } result;
 
     int nextInstanceId() { return ++instanceCounter; }
