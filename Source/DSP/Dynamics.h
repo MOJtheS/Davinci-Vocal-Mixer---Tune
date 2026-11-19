@@ -267,4 +267,47 @@ private:
     float rmsCoef = 0.f, openCoef = 0.f, closeCoef = 0.f;
     int holdSamples = 0, holdLeft = 0;
 };
+
+// Level rider ("leveler"): a slow, gentle automatic fader that moves loud and quiet phrases towards one target level before the compressor.
+// It holds its gain during pauses (below `pauseDb`) so that noise is never ridden up.
+class Rider
+{
+public:
+    void prepare (double sampleRate) { sr = sampleRate; rmsCoef = std::exp (-1.f / (float) (0.12 * sr)); reset(); }
+    void reset() { e2 = 0.f; gainDb = 0.f; lin = 1.f; counter = 0; }
+
+    // speed 0..100: 0 = very slow (about 2 s), 100 = fast (about 0.15 s)
+    void set (bool on, float targetDb, float rangeDb, float speed, float pauseDbfs)
+    {
+        enabled = on; target = targetDb; range = std::max (0.f, rangeDb); pauseDb = pauseDbfs;
+        const float tau = 2.0f * std::pow (0.15f / 2.0f, std::clamp (speed, 0.f, 100.f) * 0.01f);
+        coef = std::exp (-16.f / (float) (tau * sr));            // the gain is updated every 16 samples
+    }
+
+    float process (float x) noexcept
+    {
+        e2 = x * x + rmsCoef * (e2 - x * x);
+        if ((++counter & 15) == 0)
+        {
+            float desired = 0.f;
+            if (! enabled) desired = 0.f;
+            else
+            {
+                const float levelDb = 10.f * std::log10 (std::max (e2, 1.0e-12f));
+                desired = levelDb < pauseDb ? gainDb : std::clamp (target - levelDb, -range, range);   // pause: hold
+            }
+            gainDb = desired + coef * (gainDb - desired);
+            lin = dbToLin (gainDb);
+        }
+        return x * lin;
+    }
+
+    float currentDb() const { return gainDb; }
+
+private:
+    double sr = 44100.0;
+    bool enabled = false;
+    float target = -20.f, range = 6.f, pauseDb = -55.f, coef = 0.999f, rmsCoef = 0.999f, e2 = 0.f, gainDb = 0.f, lin = 1.f;
+    int counter = 0;
+};
 } // namespace humrig

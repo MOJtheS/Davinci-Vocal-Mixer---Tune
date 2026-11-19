@@ -456,8 +456,9 @@ std::vector<std::pair<juce::String, std::unique_ptr<juce::Component>>> createPag
     add ("Clean", std::make_unique<ControlPage> (p, std::vector<PageGroup> {
         { "INPUT", { knob (ID::inGain, "Input trim") }, 0.8f },
         { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual") }, 1.f },
-        { "NOISE BETWEEN PHRASES (EXPANDER)", { knob (ID::expThr, "Threshold"), knob (ID::expRange, "Reduction"), knob (ID::expHold, "Hold"), knob (ID::expRel, "Release"), tog (ID::expOn, "Expander on") }, 2.4f } },
-        nullptr, 0, "Tip: a gentle expander (about 10 dB) turns room noise down between words without cutting the voice. Switch it on, then raise the threshold until the noise just disappears in the gaps."));
+        { "NOISE BETWEEN PHRASES (EXPANDER)", { knob (ID::expThr, "Threshold"), knob (ID::expRange, "Reduction"), knob (ID::expHold, "Hold"), knob (ID::expRel, "Release"), tog (ID::expOn, "Expander on") }, 2.2f },
+        { "LEVELER (AUTO FADER)", { knob (ID::ridTarget, "Target"), knob (ID::ridRange, "Range"), knob (ID::ridSpeed, "Speed"), knob (ID::ridPause, "Pause level"), tog (ID::ridOn, "Leveler on") }, 2.2f } },
+        nullptr, 0, "Expander: a gentle one (about 10 dB) turns room noise down between words. Raise the threshold until the noise just disappears in the gaps. Leveler: a slow automatic fader that evens out loud and quiet phrases before the compressor; it holds still in pauses so noise is never pushed up."));
 
     add ("EQ", std::make_unique<ControlPage> (p, std::vector<PageGroup> {
         { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual") }, 1.f },
@@ -473,7 +474,8 @@ std::vector<std::pair<juce::String, std::unique_ptr<juce::Component>>> createPag
         { "AMOUNT", { knob (ID::comp, "Comp amount") }, 1.f },
         { "TIMING", { knob (ID::compAttack, "Attack"), knob (ID::compRelease, "Release"), knob (ID::compKnee, "Knee") }, 1.6f },
         { "LEVEL", { knob (ID::compRatio, "Ratio"), knob (ID::compThr, "Threshold"), knob (ID::compMk, "Make-up"), sel (ID::compDet, "Detector") }, 1.6f },
-        { "SIDE-CHAIN & PARALLEL", { knob (ID::compSc, "Side-chain HPF"), knob (ID::compMix, "Mix") }, 1.2f } },
+        { "SIDE-CHAIN & PARALLEL", { knob (ID::compSc, "Side-chain HPF"), knob (ID::compMix, "Mix") }, 1.2f },
+        { "PEAK CATCHER", { knob (ID::pkAmt, "Amount") }, 0.9f } },
         std::make_unique<GrHistoryDisplay> (p), 150, "Ratio 'Auto' follows the Comp amount. Aim for about 3-6 dB of gain reduction on the loudest words."));
 
     add ("De-ess", std::make_unique<ControlPage> (p, std::vector<PageGroup> {

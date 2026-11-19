@@ -75,7 +75,7 @@ private:
     } p {};
     struct Params2
     {
-        std::atomic<float> *limOn, *limCeil, *limRelease, *limGain, *eqManual, *eqHpfFreq, *eqHpfSlope, *eqLowFreq, *eqMudFreq, *eqMudGain, *eqMudQ, *eqBoxFreq, *eqBoxGain, *eqBoxQ, *eqPresFreq, *eqPresQ, *eqAirFreq, *eqLpfOn, *eqLpfFreq, *compRatio, *compAttack, *compRelease, *compKnee, *compMix, *compDet, *compSc, *compThr, *compMk, *dsFreq, *dsMode, *dsRange, *dsThr, *dsListen, *colType, *colTone, *colMix, *excFreq, *excAmt, *revPre, *revFilt, *revLo, *revHi, *duck, *dlyTimeEx, *dlyFree, *dlyFilt, *dlyHpf, *dlyLpf, *dblMix, *dblDelay, *dblDetune, *dblHpf, *width, *monoCheck, *expOn, *expThr, *expRange, *expHold, *expRel;
+        std::atomic<float> *limOn, *limCeil, *limRelease, *limGain, *eqManual, *eqHpfFreq, *eqHpfSlope, *eqLowFreq, *eqMudFreq, *eqMudGain, *eqMudQ, *eqBoxFreq, *eqBoxGain, *eqBoxQ, *eqPresFreq, *eqPresQ, *eqAirFreq, *eqLpfOn, *eqLpfFreq, *compRatio, *compAttack, *compRelease, *compKnee, *compMix, *compDet, *compSc, *compThr, *compMk, *dsFreq, *dsMode, *dsRange, *dsThr, *dsListen, *colType, *colTone, *colMix, *excFreq, *excAmt, *revPre, *revFilt, *revLo, *revHi, *duck, *dlyTimeEx, *dlyFree, *dlyFilt, *dlyHpf, *dlyLpf, *dblMix, *dblDelay, *dblDetune, *dblHpf, *width, *monoCheck, *expOn, *expThr, *expRange, *expHold, *expRel, *ridOn, *ridTarget, *ridRange, *ridSpeed, *ridPause, *pkAmt;
     } q {};
 
     void updateEq();
@@ -93,7 +93,8 @@ private:
     humrig::EqBands eq;
     humrig::Biquad revHpL, revHpR, revLpL, revLpR;
     humrig::Expander expander;
-    humrig::Compressor compressor;
+    humrig::Rider rider;
+    humrig::Compressor compressor, peakCatcher;
     humrig::DeEsser deesser;
     humrig::Drive drive;
     humrig::StereoDelay delay;

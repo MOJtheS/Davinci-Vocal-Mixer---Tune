@@ -1028,6 +1028,72 @@ static void testRandomParameters()
     CHECK (ceilingOk, "the limiter holds its ceiling with random settings");
 }
 
+// informational CPU measurement: how much faster than real time is the whole chain with (almost) everything switched on?
+static void testPerformance()
+{
+    std::cout << "[performance]\n";
+    const double sr = 48000.0;
+    HumRigProcessor p;
+    p.applyPreset (9 + 25 + 3);                 // "Wide Pop Lead": doubler, width, reverb, delay, EQ bands, compressor, limiter
+    setParam (p, ID::tuneOn, 1.f); setParam (p, ID::expOn, 1.f); setParam (p, ID::excAmt, 30.f);
+    auto sig = makeHum (sr, 10.0, [] (double t) { return 180.0 + 30.0 * std::sin (t); }, -50.f, 8);
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    runProcessor (p, sig, sr, 480, 1, 2);
+    const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+    const double rt = 10000.0 / ms;
+    std::cout << "  10 s of audio rendered in " << ms << " ms  (" << rt << "x real time, 1 core)\n";
+    CHECK (rt > 0.5, "the full chain renders faster than real time even in this (sanitizer / debug-info) build");
+}
+
+static void testRiderAndPeakCatcher()
+{
+    std::cout << "[leveler + peak catcher]\n";
+    const double sr = 48000.0;
+    // 12 s of a tone whose level alternates 0.04 / 0.16 (12 dB) every 1.5 s
+    std::vector<float> in ((size_t) (sr * 12.0));
+    for (size_t i = 0; i < in.size(); ++i)
+    {
+        const bool loud = ((size_t) ((double) i / sr / 1.5) % 2) == 1;
+        in[i] = (loud ? 0.16f : 0.04f) * (float) std::sin (2.0 * 3.14159265 * 220.0 * (double) i / sr);
+    }
+    auto spread = [&] (bool on)
+    {
+        HumRigProcessor p; cleanSetup (p, false);
+        setParam (p, ID::ridOn, on ? 1.f : 0.f); setParam (p, ID::ridTarget, -20.f); setParam (p, ID::ridRange, 12.f); setParam (p, ID::ridSpeed, 100.f);
+        auto y = runProcessor (p, in, sr, 480, 1, 1);
+        // level of the last second of a quiet and of a loud section (sections: quiet 6-7.5 s ... loud 7.5-9, quiet 9-10.5, loud 10.5-12)
+        const double q = dbOf (rmsOf (y, (size_t) (sr * 10.0), (size_t) (sr * 10.5))), l = dbOf (rmsOf (y, (size_t) (sr * 11.0), (size_t) (sr * 12.0)));
+        return l - q;
+    };
+    const double off = spread (false), on = spread (true);
+    CHECK (std::fabs (off - 12.0) < 0.5, "without the leveler the loud/quiet difference stays " << off << " dB");
+    CHECK (on < 6.0, "with the leveler the loud/quiet difference shrinks to " << on << " dB");
+    {   // pause: the leveler must not ride the noise floor up
+        std::vector<float> quietNoise ((size_t) (sr * 4.0)); std::mt19937 nr (3); std::normal_distribution<float> nd (0.f, 1.f);
+        for (auto& v : quietNoise) v = 0.0008f * nd (nr);                                                       // about -62 dBFS
+        auto lvl = [&] (bool on) { HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::ridOn, on ? 1.f : 0.f); setParam (p, ID::ridRange, 12.f); setParam (p, ID::ridSpeed, 100.f);
+                                   return dbOf (rmsOf (runProcessor (p, quietNoise, sr, 480, 1, 1), (size_t) (sr * 2.0))); };
+        CHECK (std::fabs (lvl (true) - lvl (false)) < 0.5, "leveler stays still during pauses (noise not boosted)");
+    }
+    // peak catcher: short loud peaks are tamed more than the body of the signal
+    {
+        std::vector<float> x ((size_t) (sr * 3.0));
+        for (size_t i = 0; i < x.size(); ++i)
+        {
+            const bool peak = ((i / 4800) % 10) == 5 && (i % 4800) < 240;
+            x[i] = (peak ? 0.9f : 0.12f) * (float) std::sin (2.0 * 3.14159265 * 300.0 * (double) i / sr);
+        }
+        auto crest = [&] (float amt)
+        {
+            HumRigProcessor p; cleanSetup (p, false); setParam (p, ID::pkAmt, amt);
+            auto y = runProcessor (p, x, sr, 480, 1, 1);
+            float pk = 0.f; for (size_t i = (size_t) sr; i < y.size(); ++i) pk = std::max (pk, std::fabs (y[i]));
+            return dbOf (pk) - dbOf (rmsOf (y, (size_t) sr));
+        };
+        CHECK (crest (80.f) < crest (0.f) - 2.0, "peak catcher lowers the crest factor (" << crest (80.f) << " vs " << crest (0.f) << " dB)");
+    }
+}
+
 static void testEditor()
 {
     std::cout << "[editor snapshot]\n";
@@ -1085,6 +1151,8 @@ int main (int argc, char** argv)
     testSpaceColorStereo();
     testScopeFeed();
     testRandomParameters();
+    testRiderAndPeakCatcher();
+    testPerformance();
     testEditor();
 
     std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";

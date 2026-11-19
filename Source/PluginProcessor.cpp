@@ -77,6 +77,12 @@ HumRigProcessor::HumRigProcessor()
     q.expRange = g (ID::expRange);
     q.expHold = g (ID::expHold);
     q.expRel = g (ID::expRel);
+    q.ridOn = g (ID::ridOn);
+    q.ridTarget = g (ID::ridTarget);
+    q.ridRange = g (ID::ridRange);
+    q.ridSpeed = g (ID::ridSpeed);
+    q.ridPause = g (ID::ridPause);
+    q.pkAmt = g (ID::pkAmt);
     instanceId = SharedBus::get().nextInstanceId();
     handledGen = SharedBus::get().requestGen.load();
 }
@@ -99,7 +105,9 @@ void HumRigProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     setLatencySamples (corrector.getLatencySamples() + limiter.lookahead());   // constant: the limiter always delays, whether it is on or off
 
     expander.prepare (sr);
+    rider.prepare (sr);
     compressor.prepare (sr);
+    peakCatcher.prepare (sr);
     deesser.prepare (sr);
     drive.prepare (sr);
     delay.prepare (sr);
@@ -195,6 +203,14 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         dr.excFreq = q.excFreq->load(); dr.excAmount = q.excAmt->load();
         drive.set (dr);
 
+        rider.set (q.ridOn->load() > 0.5f, q.ridTarget->load(), q.ridRange->load(), q.ridSpeed->load(), q.ridPause->load());
+        {   // peak catcher: a fast second compressor stage (8:1, 1 ms attack) with no net make-up gain
+            const float a = q.pkAmt->load();
+            Compressor::Settings pk;
+            pk.amount = a; pk.ratioOverride = 8.f; pk.attackMs = 1.f; pk.releaseMs = 60.f; pk.kneeDb = 3.f;
+            pk.makeupTrimDb = -(-(-4.f - 0.32f * a) * (1.f - 1.f / (1.5f + 0.045f * a)) * 0.45f);
+            peakCatcher.set (pk);
+        }
         expander.set (q.expOn->load() > 0.5f, q.expThr->load(), q.expRange->load(), q.expHold->load(), q.expRel->load());
         limiter.setParams (q.limOn->load() > 0.5f, q.limCeil->load(), q.limRelease->load(), q.limGain->load());
         preDelay.setMs (q.revPre->load());
@@ -309,8 +325,10 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         {
             float x = monoTuned[(size_t) i];
             x = eq.process (x);
+            x = rider.process (x);
             x = deesser.process (x);
             x = compressor.process (x);
+            x = peakCatcher.process (x);
             grMin = std::min (grMin, compressor.grDb);
             x = drive.process (x);
             v[i] = x;
@@ -394,7 +412,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     {
         eq.reset();
         for (auto* f : { &revHpL, &revHpR, &revLpL, &revLpR }) f->reset();
-        compressor.reset(); deesser.reset(); drive.reset(); expander.reset(); delay.reset(); preDelay.reset(); ducker.reset(); doubler.reset();
+        rider.reset(); compressor.reset(); peakCatcher.reset(); deesser.reset(); drive.reset(); expander.reset(); delay.reset(); preDelay.reset(); ducker.reset(); doubler.reset();
         limiter.reset(); reverb.reset(); corrector.reset();
     }
 

@@ -97,6 +97,13 @@ namespace ID
     inline constexpr const char* expRange   = "expRange";
     inline constexpr const char* expHold    = "expHold";
     inline constexpr const char* expRel     = "expRel";
+    // leveler (rider) + peak catcher
+    inline constexpr const char* ridOn      = "ridOn";
+    inline constexpr const char* ridTarget  = "ridTarget";
+    inline constexpr const char* ridRange   = "ridRange";
+    inline constexpr const char* ridSpeed   = "ridSpeed";
+    inline constexpr const char* ridPause   = "ridPause";
+    inline constexpr const char* pkAmt      = "pkAmt";
 }
 
 constexpr float kMixOffDb = -60.f;
