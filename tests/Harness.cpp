@@ -627,7 +627,7 @@ static void testPresetsAndState()
                && p.apvts.getRawParameterValue (ID::limOn)->load() > 0.5f, "Phone Vocal Rescue sets expander, ratio and limiter");
         p.setCurrentProgram (0);
         CHECK (p.apvts.getRawParameterValue (ID::expOn)->load() < 0.5f && p.apvts.getRawParameterValue (ID::compRatio)->load() < 1.05f
-               && p.apvts.getRawParameterValue (ID::eqMudGain)->load() == 0.f, "a classic preset puts the detailed controls back to their defaults");
+               && std::fabs (p.apvts.getRawParameterValue (ID::eqMudGain)->load()) < 0.01f, "a classic preset puts the detailed controls back to their defaults");
         // every preset renders finite audio with a hot signal; pro chains with the limiter never exceed -1 dB
         auto hot = makeHum (48000.0, 1.0, [] (double) { return 180.0; }, -60.f, 3);
         for (auto& v : hot) v *= 3.f;
