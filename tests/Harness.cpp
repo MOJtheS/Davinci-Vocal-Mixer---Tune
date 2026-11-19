@@ -13,6 +13,7 @@
 #include "DSP/PitchDetector.h"
 #include "DSP/Scale.h"
 #include "DSP/ListeningAnalyzer.h"
+#include "DSP/Denoiser.h"
 #include "DSP/Limiter.h"
 #include "DSP/Loudness.h"
 
@@ -1094,6 +1095,41 @@ static void testRiderAndPeakCatcher()
     }
 }
 
+static void testDenoiser()
+{
+    std::cout << "[denoiser]\n";
+    const double sr = 48000.0;
+    std::mt19937 rng (17); std::normal_distribution<float> nd (0.f, 1.f);
+    {   // exact delay when off
+        Denoiser d; d.prepare (sr); d.setReduction (0.f);
+        std::vector<float> in (20000); for (auto& v : in) v = 0.3f * nd (rng);
+        double err = 0; const int L = d.latency();
+        for (size_t i = 0; i < in.size(); ++i) { const float y = d.process (in[i]); if (i >= (size_t) L + 2000) err = std::max (err, (double) std::fabs (y - in[i - (size_t) L])); }
+        CHECK (err < 1e-4, "denoiser at 0 dB reconstructs the input exactly, delayed by " << L << " samples (max err " << err << ")");
+    }
+    {   // steady noise goes down, a sung tone stays
+        auto makeTone = [&] (size_t n) { std::vector<float> t (n); for (size_t i = 0; i < n; ++i) { double s = 0; for (int h = 1; h <= 5; ++h) s += std::sin (2.0 * 3.14159265 * 220.0 * h * (double) i / sr) / h; t[i] = 0.12f * (float) s; } return t; };
+        auto noiseOnly = [&] (double sec, float amp) { std::vector<float> v ((size_t) (sec * sr)); for (auto& x : v) x = amp * nd (rng); return v; };
+        // 6 s of noise at about -50 dBFS, then 2 s tone + noise
+        auto in = noiseOnly (6.0, 0.003f);
+        auto tone = makeTone ((size_t) (2.0 * sr)); auto n2 = noiseOnly (2.0, 0.003f);
+        for (size_t i = 0; i < tone.size(); ++i) in.push_back (tone[i] + n2[i]);
+        auto run = [&] (float red) { Denoiser d; d.prepare (sr); d.setReduction (red); std::vector<float> y (in.size()); for (size_t i = 0; i < in.size(); ++i) y[i] = d.process (in[i]); return y; };
+        auto y0 = run (0.f), y12 = run (12.f);
+        const double nb = dbOf (rmsOf (y0, (size_t) (4.5 * sr), (size_t) (5.8 * sr))), na = dbOf (rmsOf (y12, (size_t) (4.5 * sr), (size_t) (5.8 * sr)));
+        CHECK (nb - na > 6.0, "steady noise is reduced by " << nb - na << " dB at the 12 dB setting");
+        auto g220 = [&] (const std::vector<float>& y)
+        {
+            const size_t from = (size_t) (7.0 * sr), n = (size_t) (0.5 * sr);
+            const double w = 2.0 * 3.14159265 * 220.0 / sr, c = 2.0 * std::cos (w); double s1 = 0, s2 = 0;
+            for (size_t i = 0; i < n; ++i) { const double s = y[from + i] + c * s1 - s2; s2 = s1; s1 = s; }
+            return std::sqrt (s1 * s1 + s2 * s2 - c * s1 * s2) / ((double) n / 2.0);
+        };
+        const double ta = dbOf (g220 (y12)) - dbOf (g220 (y0));
+        CHECK (std::fabs (ta) < 1.5, "the sung tone keeps its level (" << ta << " dB change at 220 Hz)");
+    }
+}
+
 static void testEditor()
 {
     std::cout << "[editor snapshot]\n";
@@ -1145,12 +1181,13 @@ int main (int argc, char** argv)
     testImpulse (44100.0);
     testRobustness (48000.0);
     testChain (48000.0);
-    testGolden (Limiter::lookaheadFor (48000.0));
+    testGolden (Limiter::lookaheadFor (48000.0) + 512);
     testLimiterAndLoudness();
     testEqDynamicsPro();
     testSpaceColorStereo();
     testScopeFeed();
     testRandomParameters();
+    testDenoiser();
     testRiderAndPeakCatcher();
     testPerformance();
     testEditor();

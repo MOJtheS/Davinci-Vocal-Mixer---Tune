@@ -8,6 +8,7 @@
 #include "DSP/Dynamics.h"
 #include "DSP/Effects.h"
 #include "DSP/EqDesign.h"
+#include "DSP/Denoiser.h"
 #include "DSP/Limiter.h"
 #include "DSP/Loudness.h"
 #include "DSP/PitchCorrector.h"
@@ -75,7 +76,7 @@ private:
     } p {};
     struct Params2
     {
-        std::atomic<float> *limOn, *limCeil, *limRelease, *limGain, *eqManual, *eqHpfFreq, *eqHpfSlope, *eqLowFreq, *eqMudFreq, *eqMudGain, *eqMudQ, *eqBoxFreq, *eqBoxGain, *eqBoxQ, *eqPresFreq, *eqPresQ, *eqAirFreq, *eqLpfOn, *eqLpfFreq, *compRatio, *compAttack, *compRelease, *compKnee, *compMix, *compDet, *compSc, *compThr, *compMk, *dsFreq, *dsMode, *dsRange, *dsThr, *dsListen, *colType, *colTone, *colMix, *excFreq, *excAmt, *revPre, *revFilt, *revLo, *revHi, *duck, *dlyTimeEx, *dlyFree, *dlyFilt, *dlyHpf, *dlyLpf, *dblMix, *dblDelay, *dblDetune, *dblHpf, *width, *monoCheck, *expOn, *expThr, *expRange, *expHold, *expRel, *ridOn, *ridTarget, *ridRange, *ridSpeed, *ridPause, *pkAmt;
+        std::atomic<float> *limOn, *limCeil, *limRelease, *limGain, *eqManual, *eqHpfFreq, *eqHpfSlope, *eqLowFreq, *eqMudFreq, *eqMudGain, *eqMudQ, *eqBoxFreq, *eqBoxGain, *eqBoxQ, *eqPresFreq, *eqPresQ, *eqAirFreq, *eqLpfOn, *eqLpfFreq, *compRatio, *compAttack, *compRelease, *compKnee, *compMix, *compDet, *compSc, *compThr, *compMk, *dsFreq, *dsMode, *dsRange, *dsThr, *dsListen, *colType, *colTone, *colMix, *excFreq, *excAmt, *revPre, *revFilt, *revLo, *revHi, *duck, *dlyTimeEx, *dlyFree, *dlyFilt, *dlyHpf, *dlyLpf, *dblMix, *dblDelay, *dblDetune, *dblHpf, *width, *monoCheck, *expOn, *expThr, *expRange, *expHold, *expRel, *ridOn, *ridTarget, *ridRange, *ridSpeed, *ridPause, *pkAmt, *dnAmt;
     } q {};
 
     void updateEq();
@@ -93,6 +94,7 @@ private:
     humrig::EqBands eq;
     humrig::Biquad revHpL, revHpR, revLpL, revLpR;
     humrig::Expander expander;
+    humrig::Denoiser denoiser;
     humrig::Rider rider;
     humrig::Compressor compressor, peakCatcher;
     humrig::DeEsser deesser;

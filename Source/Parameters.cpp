@@ -146,6 +146,7 @@ APVTS::ParameterLayout createParameterLayout()
     l.add (std::make_unique<P> (PID (ID::ridSpeed, v2), "Leveler Speed", fullRange (0, 100), 50.f, pctAttr));
     l.add (std::make_unique<P> (PID (ID::ridPause, v2), "Leveler Pause Level", fullRange (-70, -30), -55.f, dbLab));
     l.add (std::make_unique<P> (PID (ID::pkAmt, v2), "Peak Catcher", fullRange (0, 100), 0.f, pctAttr));
+    l.add (std::make_unique<P> (PID (ID::dnAmt, v2), "Denoise", fullRange (0, 12), 0.f, autoIfLow (0.05f, "Off", "dB")));
     return l;
 }
 
@@ -161,13 +162,13 @@ static const Extra kPhoneRescue[] = {
     { ID::eqBoxFreq, 800 }, { ID::eqBoxGain, -1.5f }, { ID::eqBoxQ, 1.5f },
     { ID::compRatio, 3.f }, { ID::compAttack, 10 }, { ID::compRelease, 110 }, { ID::compSc, 120 }, { ID::compKnee, 8 },
     { ID::dsFreq, 6500 }, { ID::revPre, 30 }, { ID::revFilt, 1 }, { ID::revLo, 200 }, { ID::revHi, 9000 }, { ID::duck, 40 },
-    { ID::ridOn, 1 }, { ID::ridTarget, -20 }, { ID::ridRange, 6 }, { ID::ridSpeed, 45 }, { ID::pkAmt, 35 },
+    { ID::ridOn, 1 }, { ID::ridTarget, -20 }, { ID::ridRange, 6 }, { ID::ridSpeed, 45 }, { ID::pkAmt, 35 }, { ID::dnAmt, 6 },
     { ID::limOn, 1 }, { ID::limCeil, -1 } };
 static const Extra kHumPolish[] = {
     { ID::expOn, 1 }, { ID::expThr, -55 }, { ID::expRange, 8 }, { ID::expHold, 150 },
     { ID::eqManual, 1 }, { ID::eqHpfFreq, 80 }, { ID::eqMudFreq, 250 }, { ID::eqMudGain, -2 }, { ID::eqMudQ, 0.9f },
     { ID::compRatio, 2.5f }, { ID::compAttack, 15 }, { ID::compRelease, 160 }, { ID::compDet, 1 },
-    { ID::colType, 1 }, { ID::colMix, 35 }, { ID::excAmt, 12 }, { ID::excFreq, 6000 },
+    { ID::dnAmt, 4 }, { ID::colType, 1 }, { ID::colMix, 35 }, { ID::excAmt, 12 }, { ID::excFreq, 6000 },
     { ID::revPre, 25 }, { ID::revFilt, 1 }, { ID::duck, 35 }, { ID::dblMix, 12 }, { ID::dblDelay, 14 }, { ID::width, 115 },
     { ID::ridOn, 1 }, { ID::ridTarget, -22 }, { ID::ridRange, 5 }, { ID::ridSpeed, 35 },
     { ID::limOn, 1 }, { ID::limCeil, -1 } };
@@ -258,7 +259,7 @@ const char* const* detailedParamIds (int& count)
         ID::dsFreq, ID::dsMode, ID::dsRange, ID::dsThr, ID::dsListen, ID::colType, ID::colTone, ID::colMix, ID::excFreq, ID::excAmt,
         ID::revPre, ID::revFilt, ID::revLo, ID::revHi, ID::duck, ID::dlyTimeEx, ID::dlyFree, ID::dlyFilt, ID::dlyHpf, ID::dlyLpf,
         ID::dblMix, ID::dblDelay, ID::dblDetune, ID::dblHpf, ID::width, ID::monoCheck, ID::expOn, ID::expThr, ID::expRange, ID::expHold, ID::expRel,
-        ID::ridOn, ID::ridTarget, ID::ridRange, ID::ridSpeed, ID::ridPause, ID::pkAmt };
+        ID::ridOn, ID::ridTarget, ID::ridRange, ID::ridSpeed, ID::ridPause, ID::pkAmt, ID::dnAmt };
     count = (int) (sizeof (ids) / sizeof (ids[0]));
     return ids;
 }

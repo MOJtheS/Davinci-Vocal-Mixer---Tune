@@ -104,6 +104,7 @@ namespace ID
     inline constexpr const char* ridSpeed   = "ridSpeed";
     inline constexpr const char* ridPause   = "ridPause";
     inline constexpr const char* pkAmt      = "pkAmt";
+    inline constexpr const char* dnAmt      = "dnAmt";
 }
 
 constexpr float kMixOffDb = -60.f;

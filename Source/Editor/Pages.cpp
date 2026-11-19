@@ -455,10 +455,11 @@ std::vector<std::pair<juce::String, std::unique_ptr<juce::Component>>> createPag
 
     add ("Clean", std::make_unique<ControlPage> (p, std::vector<PageGroup> {
         { "INPUT", { knob (ID::inGain, "Input trim") }, 0.8f },
+        { "DENOISE", { knob (ID::dnAmt, "Reduction") }, 0.8f },
         { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual") }, 1.f },
-        { "NOISE BETWEEN PHRASES (EXPANDER)", { knob (ID::expThr, "Threshold"), knob (ID::expRange, "Reduction"), knob (ID::expHold, "Hold"), knob (ID::expRel, "Release"), tog (ID::expOn, "Expander on") }, 2.2f },
-        { "LEVELER (AUTO FADER)", { knob (ID::ridTarget, "Target"), knob (ID::ridRange, "Range"), knob (ID::ridSpeed, "Speed"), knob (ID::ridPause, "Pause level"), tog (ID::ridOn, "Leveler on") }, 2.2f } },
-        nullptr, 0, "Expander: a gentle one (about 10 dB) turns room noise down between words. Raise the threshold until the noise just disappears in the gaps. Leveler: a slow automatic fader that evens out loud and quiet phrases before the compressor; it holds still in pauses so noise is never pushed up."));
+        { "NOISE BETWEEN PHRASES (EXPANDER)", { knob (ID::expThr, "Threshold"), knob (ID::expRange, "Reduction"), knob (ID::expHold, "Hold"), knob (ID::expRel, "Release"), tog (ID::expOn, "Expander on") }, 2.0f },
+        { "LEVELER (AUTO FADER)", { knob (ID::ridTarget, "Target"), knob (ID::ridRange, "Range"), knob (ID::ridSpeed, "Speed"), knob (ID::ridPause, "Pause level"), tog (ID::ridOn, "Leveler on") }, 2.0f } },
+        nullptr, 0, "Denoise: removes steady noise (hiss, hum, room tone) without a learning step; 4-8 dB is usually enough, more can sound watery. Expander: a gentle one (about 10 dB) turns room noise down between words. Raise the threshold until the noise just disappears in the gaps. Leveler: a slow automatic fader that evens out loud and quiet phrases before the compressor; it holds still in pauses so noise is never pushed up."));
 
     add ("EQ", std::make_unique<ControlPage> (p, std::vector<PageGroup> {
         { "LOW CUT", { knob (ID::eqHpfFreq, "Frequency"), sel (ID::eqHpfSlope, "Slope"), tog (ID::eqManual, "Manual") }, 1.f },

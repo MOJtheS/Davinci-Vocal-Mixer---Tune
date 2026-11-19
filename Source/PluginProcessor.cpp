@@ -83,6 +83,7 @@ HumRigProcessor::HumRigProcessor()
     q.ridSpeed = g (ID::ridSpeed);
     q.ridPause = g (ID::ridPause);
     q.pkAmt = g (ID::pkAmt);
+    q.dnAmt = g (ID::dnAmt);
     instanceId = SharedBus::get().nextInstanceId();
     handledGen = SharedBus::get().requestGen.load();
 }
@@ -102,7 +103,8 @@ void HumRigProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
     corrector.prepare (sr, maxBlock);
     limiter.prepare (sr);
-    setLatencySamples (corrector.getLatencySamples() + limiter.lookahead());   // constant: the limiter always delays, whether it is on or off
+    denoiser.prepare (sr);
+    setLatencySamples (corrector.getLatencySamples() + denoiser.latency() + limiter.lookahead());   // constant: denoiser and limiter always delay, whether they are on or off
 
     expander.prepare (sr);
     rider.prepare (sr);
@@ -121,7 +123,7 @@ void HumRigProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     for (auto* f : { &revHpL, &revHpR, &revLpL, &revLpR }) f->reset();
     lastRevLo = lastRevHi = -1.f;
 
-    for (auto& r : dryRing) r.assign ((size_t) std::max (1, corrector.getLatencySamples()), 0.f);
+    for (auto& r : dryRing) r.assign ((size_t) std::max (1, corrector.getLatencySamples() + denoiser.latency()), 0.f);
     dryPos = 0;
 
     analyzer.prepare (sr);
@@ -211,6 +213,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             pk.makeupTrimDb = -(-(-4.f - 0.32f * a) * (1.f - 1.f / (1.5f + 0.045f * a)) * 0.45f);
             peakCatcher.set (pk);
         }
+        denoiser.setReduction (q.dnAmt->load());
         expander.set (q.expOn->load() > 0.5f, q.expThr->load(), q.expRange->load(), q.expHold->load(), q.expRel->load());
         limiter.setParams (q.limOn->load() > 0.5f, q.limCeil->load(), q.limRelease->load(), q.limGain->load());
         preDelay.setMs (q.revPre->load());
@@ -323,7 +326,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         float* v = voice.data();
         for (int i = 0; i < n; ++i)
         {
-            float x = monoTuned[(size_t) i];
+            float x = denoiser.process (monoTuned[(size_t) i]);      // after pitch correction: keeps the pitch engine's timing independent of the denoiser delay
             x = eq.process (x);
             x = rider.process (x);
             x = deesser.process (x);
@@ -412,7 +415,7 @@ void HumRigProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     {
         eq.reset();
         for (auto* f : { &revHpL, &revHpR, &revLpL, &revLpR }) f->reset();
-        rider.reset(); compressor.reset(); peakCatcher.reset(); deesser.reset(); drive.reset(); expander.reset(); delay.reset(); preDelay.reset(); ducker.reset(); doubler.reset();
+        denoiser.reset(); rider.reset(); compressor.reset(); peakCatcher.reset(); deesser.reset(); drive.reset(); expander.reset(); delay.reset(); preDelay.reset(); ducker.reset(); doubler.reset();
         limiter.reset(); reverb.reset(); corrector.reset();
     }
 
