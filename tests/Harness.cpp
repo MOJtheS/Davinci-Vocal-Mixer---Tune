@@ -570,7 +570,7 @@ static void testPresetsAndState()
 {
     std::cout << "[presets & state]\n";
     HumRigProcessor p;
-    CHECK (p.getNumPrograms() == 34, "has " << p.getNumPrograms() << " presets (9 general + 25 artist)");
+    CHECK (p.getNumPrograms() == 39, "has " << p.getNumPrograms() << " presets (9 general + 25 artist + 5 pro chains)");
     {
         std::map<std::string, int> perGenre;
         for (int i = 0; i < getNumPresets(); ++i) ++perGenre[getPreset (i).genre];
@@ -584,6 +584,46 @@ static void testPresetsAndState()
             if (q.dlyTime < 0 || q.dlyTime > 2 || q.revDecay < 0.2f || q.revDecay > 8.f || q.revMix < kMixOffDb || q.revMix > 0.f) inRange = false;
         }
         CHECK (inRange, "every preset value is inside its parameter range");
+    }
+    {   // pro chains: every extra refers to a real parameter and is inside its range; presets apply and reset cleanly
+        bool ok = true; int pro = 0;
+        for (int i = 0; i < getNumPresets(); ++i)
+        {
+            const auto& pr = getPreset (i);
+            if (std::string (pr.genre) == "Pro Chains") ++pro;
+            for (int k = 0; k < pr.numExtras; ++k)
+            {
+                auto* prm = p.apvts.getParameter (pr.extras[k].id);
+                if (prm == nullptr) { ok = false; std::cout << "  unknown extra id " << pr.extras[k].id << "\n"; continue; }
+                const auto r = p.apvts.getParameterRange (pr.extras[k].id);
+                if (pr.extras[k].value < r.start - 1e-4f || pr.extras[k].value > r.end + 1e-4f) { ok = false; std::cout << "  out of range: " << pr.extras[k].id << "\n"; }
+            }
+        }
+        CHECK (ok && pro == 5, "5 pro-chain presets, all detailed values valid");
+        int rescue = -1; for (int i = 0; i < getNumPresets(); ++i) if (std::string (getPreset (i).name) == "Phone Vocal Rescue") rescue = i;
+        p.setCurrentProgram (rescue);
+        CHECK (p.apvts.getRawParameterValue (ID::expOn)->load() > 0.5f && std::fabs (p.apvts.getRawParameterValue (ID::compRatio)->load() - 3.f) < 0.1f
+               && p.apvts.getRawParameterValue (ID::limOn)->load() > 0.5f, "Phone Vocal Rescue sets expander, ratio and limiter");
+        p.setCurrentProgram (0);
+        CHECK (p.apvts.getRawParameterValue (ID::expOn)->load() < 0.5f && p.apvts.getRawParameterValue (ID::compRatio)->load() < 1.05f
+               && p.apvts.getRawParameterValue (ID::eqMudGain)->load() == 0.f, "a classic preset puts the detailed controls back to their defaults");
+        // every preset renders finite audio with a hot signal; pro chains with the limiter never exceed -1 dB
+        auto hot = makeHum (48000.0, 1.0, [] (double) { return 180.0; }, -60.f, 3);
+        for (auto& v : hot) v *= 3.f;
+        bool finite = true, ceilingOk = true;
+        for (int i = 0; i < getNumPresets(); ++i)
+        {
+            HumRigProcessor r; r.applyPreset (i);
+            bool bad = false; auto y = runProcessor (r, hot, 48000.0, 480, 1, 2, &bad);
+            if (bad) finite = false;
+            if (std::string (getPreset (i).genre) == "Pro Chains")
+            {
+                float pk = 0.f; for (size_t k = 6000; k < y.size(); ++k) pk = std::max (pk, std::fabs (y[k]));
+                if (pk > 0.8914f) { ceilingOk = false; std::cout << "  preset " << getPreset (i).name << " peak " << pk << "\n"; }
+            }
+        }
+        CHECK (finite, "all presets render finite audio on a hot signal");
+        CHECK (ceilingOk, "pro-chain presets keep the output under the -1 dB ceiling");
     }
     p.setCurrentProgram (4);
     CHECK (std::string (p.getProgramName (4).toRawUTF8()) == "K-Pop", "program 4 is K-Pop");

@@ -109,15 +109,23 @@ inline constexpr double kDelayTimeExBeats[] = { 0.0, 2.0, 1.0, 1.5, 2.0 / 3.0, 0
 
 juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+// A value for one of the detailed (v0.3) controls. Presets list only what they change; every other detailed control is reset to its default.
+struct Extra { const char* id; float value; };
+
 struct Preset
 {
-    const char* genre;   // menu section: General / Pop / Rap / Rock / Classic Rock / Metal
+    const char* genre;   // menu section: General / Pop / Rap / Rock / Classic Rock / Metal / Pro Chains
     const char* name;
     float warmth, presence, air, comp, deess, drive;
     float revMix, revSize, revDecay;
     float dlyMix, dlyFb; int dlyTime; bool dlyPing;
     float speed, vibrato, flex;
+    const Extra* extras = nullptr;   // detailed controls (EQ bands, compressor timing, limiter ...)
+    int numExtras = 0;
 };
+
+// ids of all detailed controls added in v0.3 (reset to default whenever a preset is applied)
+const char* const* detailedParamIds (int& count);
 
 int getNumPresets();
 const Preset& getPreset (int index);

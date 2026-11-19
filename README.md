@@ -1,8 +1,9 @@
 # HumRig
 
 Vocal tune + mix plugin (AU / VST3) for **DaVinci Resolve Fairlight** on macOS.
-Built for raw hummed / sung phone recordings: auto-tune (key + scale), EQ, compressor with GR meter,
-de-esser, drive, reverb, delay and presets, in one window.
+Built for raw hummed / sung phone recordings: auto-tune (key + scale) and a full vocal chain in nine tabs
+(Home, Clean, EQ, Compress, De-ess, Color, Space, Stereo, Master): expander, 6-band EQ with live curve, full compressor,
+band de-esser, saturation + exciter, reverb/delay with pre-delay, filters and ducking, doubler/width, look-ahead limiter and LUFS meter, plus presets.
 
 - Persian install & usage guide: [INSTALL_FA.md](INSTALL_FA.md)
 - Built with JUCE 8 and Signalsmith Stretch (MIT). Pitch detection: YIN.
@@ -23,7 +24,9 @@ cmake --build build --target HumRig_VST3 HumRig_AU -j4           # AU is macOS-o
 ## Tests (`tests/Harness.cpp`)
 Pitch detector accuracy, scale snapping, end-to-end correction of off-key synthetic hums (steady + glide, with noise),
 Flex behaviour, latency == `setLatencySamples`, bypass latency equality, mono/stereo layouts, block sizes 1..2048,
-no clicks / NaNs, mix chain, presets and state round-trip, editor snapshot.
+no clicks / NaNs, mix chain, presets and state round-trip, editor snapshots of every tab,
+and per-module checks for the limiter, BS.1770 loudness, EQ bands, compressor, de-esser, expander, saturation, space and stereo tools.
+A golden regression (Linux) proves the v0.2 sound is unchanged when the new controls are at their defaults.
 
 ## Licence note
 JUCE is AGPLv3 / commercial. Fine for a public open-source repo; get a JUCE licence before selling binaries.

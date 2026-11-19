@@ -143,6 +143,47 @@ APVTS::ParameterLayout createParameterLayout()
 }
 
 
+
+// ---------------------------------------------------------------------------------------------------------
+// "Pro Chains": presets that use the detailed controls. Starting points from the post-production research report
+// (expander ~10 dB, mud cut 2-3 dB around 300 Hz, serial gentle compression 3-6 dB, pre-delay 20-40 ms, ducked and filtered returns, -1 dB ceiling).
+// They are starting points, not rules: adjust by ear.
+static const Extra kPhoneRescue[] = {
+    { ID::expOn, 1 }, { ID::expThr, -52 }, { ID::expRange, 10 }, { ID::expHold, 120 },
+    { ID::eqManual, 1 }, { ID::eqHpfFreq, 100 }, { ID::eqHpfSlope, 1 }, { ID::eqMudFreq, 300 }, { ID::eqMudGain, -3 }, { ID::eqMudQ, 1.0f },
+    { ID::eqBoxFreq, 800 }, { ID::eqBoxGain, -1.5f }, { ID::eqBoxQ, 1.5f },
+    { ID::compRatio, 3.f }, { ID::compAttack, 10 }, { ID::compRelease, 110 }, { ID::compSc, 120 }, { ID::compKnee, 8 },
+    { ID::dsFreq, 6500 }, { ID::revPre, 30 }, { ID::revFilt, 1 }, { ID::revLo, 200 }, { ID::revHi, 9000 }, { ID::duck, 40 },
+    { ID::limOn, 1 }, { ID::limCeil, -1 } };
+static const Extra kHumPolish[] = {
+    { ID::expOn, 1 }, { ID::expThr, -55 }, { ID::expRange, 8 }, { ID::expHold, 150 },
+    { ID::eqManual, 1 }, { ID::eqHpfFreq, 80 }, { ID::eqMudFreq, 250 }, { ID::eqMudGain, -2 }, { ID::eqMudQ, 0.9f },
+    { ID::compRatio, 2.5f }, { ID::compAttack, 15 }, { ID::compRelease, 160 }, { ID::compDet, 1 },
+    { ID::colType, 1 }, { ID::colMix, 35 }, { ID::excAmt, 12 }, { ID::excFreq, 6000 },
+    { ID::revPre, 25 }, { ID::revFilt, 1 }, { ID::duck, 35 }, { ID::dblMix, 12 }, { ID::dblDelay, 14 }, { ID::width, 115 },
+    { ID::limOn, 1 }, { ID::limCeil, -1 } };
+static const Extra kBroadcast[] = {
+    { ID::eqManual, 1 }, { ID::eqHpfFreq, 90 }, { ID::eqHpfSlope, 1 }, { ID::eqMudFreq, 280 }, { ID::eqMudGain, -2.5f },
+    { ID::eqPresFreq, 3500 }, { ID::eqPresQ, 1.0f },
+    { ID::compRatio, 4.f }, { ID::compAttack, 12 }, { ID::compRelease, 90 }, { ID::compKnee, 6 }, { ID::compMk, 1.5f },
+    { ID::dsFreq, 6000 }, { ID::dsRange, 8 }, { ID::colType, 1 }, { ID::colMix, 40 },
+    { ID::limOn, 1 }, { ID::limCeil, -1 }, { ID::limGain, 2.f } };
+static const Extra kWidePop[] = {
+    { ID::eqManual, 1 }, { ID::eqHpfFreq, 90 }, { ID::eqMudFreq, 300 }, { ID::eqMudGain, -2 }, { ID::eqAirFreq, 12000 },
+    { ID::compRatio, 3.f }, { ID::compAttack, 8 }, { ID::compRelease, 100 }, { ID::compSc, 100 },
+    { ID::dsFreq, 7000 }, { ID::excAmt, 15 }, { ID::excFreq, 6500 },
+    { ID::dlyTimeEx, 6 }, { ID::dlyFilt, 1 }, { ID::dlyHpf, 250 }, { ID::dlyLpf, 5000 },
+    { ID::revPre, 35 }, { ID::revFilt, 1 }, { ID::revLo, 220 }, { ID::revHi, 9500 }, { ID::duck, 55 },
+    { ID::dblMix, 28 }, { ID::dblDelay, 16 }, { ID::dblDetune, 9 }, { ID::width, 130 },
+    { ID::limOn, 1 }, { ID::limCeil, -1 } };
+static const Extra kDarkIntimate[] = {
+    { ID::expOn, 1 }, { ID::expThr, -54 }, { ID::expRange, 9 },
+    { ID::eqManual, 1 }, { ID::eqHpfFreq, 85 }, { ID::eqLowFreq, 200 }, { ID::eqMudFreq, 320 }, { ID::eqMudGain, -1.5f },
+    { ID::eqLpfOn, 1 }, { ID::eqLpfFreq, 14000 },
+    { ID::compRatio, 2.f }, { ID::compAttack, 20 }, { ID::compRelease, 200 }, { ID::compDet, 1 }, { ID::compMix, 70 },
+    { ID::colType, 2 }, { ID::colMix, 50 }, { ID::revPre, 20 }, { ID::revFilt, 1 }, { ID::revHi, 7000 }, { ID::duck, 30 },
+    { ID::limOn, 1 }, { ID::limCeil, -1 } };
+
 //                  genre name        warm pres air  comp ds  drv | revMix size decay | dlyMix fb  time ping | spd vib flex
 static const Preset kPresets[] = {
     { "General", "Default",        50, 50, 50, 40, 40, 15,  -30.f, 0.53f, 2.1f,  -34.f, 45, 0, true,   60,  0, 20 },
@@ -190,7 +231,27 @@ static const Preset kPresets[] = {
     { "Metal", "Bring Me The Horizon",        40, 64, 62,  88, 65, 62,  -20.f, 0.80f, 3.0f,  -24.f, 40, 1, true,   60, 20, 30 },
     { "Metal", "Lamb of God",                 38, 66, 52,  78, 55, 72,  -42.f, 0.20f, 0.6f,  kMixOffDb, 20, 1, false, 20,  0, 70 },
     { "Metal", "David Draiman / Disturbed",   46, 62, 55,  75, 55, 55,  -30.f, 0.50f, 1.4f,  -32.f, 25, 1, false,  45, 25, 40 },
+
+    // Pro Chains (use the detailed tabs)
+    { "Pro Chains", "Phone Vocal Rescue",    50, 58, 55,  55, 45, 12,  -26.f, 0.45f, 1.6f,  kMixOffDb, 30, 1, false,  60,  0, 30, kPhoneRescue,  (int) (sizeof (kPhoneRescue)  / sizeof (Extra)) },
+    { "Pro Chains", "Hum Polish",            52, 56, 62,  42, 30,  8,  -22.f, 0.55f, 2.0f,  -36.f, 30, 1, true,   55, 10, 30, kHumPolish,    (int) (sizeof (kHumPolish)    / sizeof (Extra)) },
+    { "Pro Chains", "Broadcast Voice",       55, 60, 50,  65, 50, 10,  -40.f, 0.25f, 0.8f,  kMixOffDb, 30, 1, false,  70,  0, 20, kBroadcast,   (int) (sizeof (kBroadcast)   / sizeof (Extra)) },
+    { "Pro Chains", "Wide Pop Lead",         45, 60, 70,  55, 50, 15,  -22.f, 0.60f, 1.9f,  -30.f, 30, 1, true,   80,  8, 15, kWidePop,      (int) (sizeof (kWidePop)      / sizeof (Extra)) },
+    { "Pro Chains", "Dark Intimate",         60, 48, 40,  38, 30, 12,  -26.f, 0.50f, 1.8f,  kMixOffDb, 30, 1, false,  45, 12, 40, kDarkIntimate, (int) (sizeof (kDarkIntimate) / sizeof (Extra)) },
 };
+
+const char* const* detailedParamIds (int& count)
+{
+    static const char* const ids[] = {
+        ID::limOn, ID::limCeil, ID::limRelease, ID::limGain, ID::eqManual, ID::eqHpfFreq, ID::eqHpfSlope, ID::eqLowFreq, ID::eqMudFreq, ID::eqMudGain,
+        ID::eqMudQ, ID::eqBoxFreq, ID::eqBoxGain, ID::eqBoxQ, ID::eqPresFreq, ID::eqPresQ, ID::eqAirFreq, ID::eqLpfOn, ID::eqLpfFreq,
+        ID::compRatio, ID::compAttack, ID::compRelease, ID::compKnee, ID::compMix, ID::compDet, ID::compSc, ID::compThr, ID::compMk,
+        ID::dsFreq, ID::dsMode, ID::dsRange, ID::dsThr, ID::dsListen, ID::colType, ID::colTone, ID::colMix, ID::excFreq, ID::excAmt,
+        ID::revPre, ID::revFilt, ID::revLo, ID::revHi, ID::duck, ID::dlyTimeEx, ID::dlyFree, ID::dlyFilt, ID::dlyHpf, ID::dlyLpf,
+        ID::dblMix, ID::dblDelay, ID::dblDetune, ID::dblHpf, ID::width, ID::monoCheck, ID::expOn, ID::expThr, ID::expRange, ID::expHold, ID::expRel };
+    count = (int) (sizeof (ids) / sizeof (ids[0]));
+    return ids;
+}
 
 int getNumPresets() { return (int) (sizeof (kPresets) / sizeof (kPresets[0])); }
 const Preset& getPreset (int i) { return kPresets[juce::jlimit (0, getNumPresets() - 1, i)]; }

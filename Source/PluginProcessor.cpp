@@ -477,6 +477,19 @@ void HumRigProcessor::applyPreset (int index)
     set (ID::dlyMix, pr.dlyMix); set (ID::dlyFb, pr.dlyFb); set (ID::dlyTime, (float) pr.dlyTime);
     set (ID::dlyPing, pr.dlyPing ? 1.f : 0.f);
     set (ID::speed, pr.speed); set (ID::vibrato, pr.vibrato); set (ID::flex, pr.flex);
+
+    // detailed controls: back to their defaults, then the preset's own values (dsMode stays on the new band mode)
+    int n = 0;
+    const auto* ids = detailedParamIds (n);
+    for (int i = 0; i < n; ++i)
+    {
+        const juce::String id (ids[i]);
+        if (id == ID::monoCheck || id == ID::dsListen || id == ID::limCeil || id == ID::limRelease || id == ID::limGain)   // delivery / monitoring settings stay as they are
+            continue;
+        if (id == ID::limOn && pr.numExtras == 0) continue;                       // classic presets do not touch the limiter
+        if (auto* prm = apvts.getParameter (ids[i])) prm->setValueNotifyingHost (prm->getDefaultValue());
+    }
+    for (int i = 0; i < pr.numExtras; ++i) set (pr.extras[i].id, pr.extras[i].value);
 }
 
 void HumRigProcessor::getStateInformation (juce::MemoryBlock& dest)
